@@ -25,6 +25,7 @@ import { ColorField, NumberField } from "./fields";
 import { GradientEditor } from "./GradientEditor";
 import { EasingEditor } from "./EasingEditor";
 import { AlignButtons, FontSelect } from "./ToolPalette";
+import { ScriptEditor } from "./ScriptEditor";
 import { describeImport, importAudio } from "../assets";
 
 interface Props {
@@ -529,6 +530,7 @@ function FramePanel({ engine, target, run, onMessage }: { engine: Engine; target
           </>
         )}
       </section>
+      {kf && <ScriptSection engine={engine} layer={layer.id} start={kf.start} label={kf.label ?? ""} script={kf.script ?? ""} run={run} />}
       {kf && <SoundSection engine={engine} layer={layer.id} start={kf.start} duration={kf.duration} sound={kf.sound ?? null} run={run} onMessage={onMessage} />}
     </div>
   );
@@ -717,6 +719,49 @@ function SoundSection(props: {
             </p>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+const FRAME_SCRIPT_HINT = `// Runs when the playhead enters this keyframe.
+// stop(); gotoAndPlay("label"); myClip.x += 10;
+// this.onEnterFrame = function () { … };`;
+
+function ScriptSection(props: { engine: Engine; layer: number; start: number; label: string; script: string; run: Props["run"] }) {
+  const { engine, layer, start, run } = props;
+  const [expanded, setExpanded] = useState(false);
+  const ids = JSON.stringify([layer]);
+  const apply = (s: string) => run(() => engine.setFrameScript(ids, start, s.trim() ? s : undefined));
+  return (
+    <section>
+      <h4>
+        Label &amp; script
+        <button className="mini" title="Open a larger editor" onClick={() => setExpanded(true)}>
+          ⤢
+        </button>
+      </h4>
+      <label className="field wide">
+        <span className="field-label">Label</span>
+        <input
+          key={`${layer}:${start}:${props.label}`}
+          defaultValue={props.label}
+          placeholder="(none): name this frame for gotoAndPlay"
+          onBlur={(e) => e.target.value.trim() !== props.label && run(() => engine.setFrameLabel(ids, start, e.target.value.trim() || undefined))}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        />
+      </label>
+      {!expanded && <ScriptEditor key={`${layer}:${start}`} value={props.script} onApply={apply} placeholder={FRAME_SCRIPT_HINT} rows={8} />}
+      {expanded && (
+        <div className="modal-backdrop" onClick={() => setExpanded(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <h3>Frame script: frame {start + 1}</h3>
+            <ScriptEditor value={props.script} onApply={apply} placeholder={FRAME_SCRIPT_HINT} rows={22} autoFocus />
+            <div className="btn-row">
+              <button onClick={() => setExpanded(false)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

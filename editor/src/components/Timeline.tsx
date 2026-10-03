@@ -285,13 +285,32 @@ function drawCells(
         g.strokeStyle = "#8a8a9a";
         g.strokeRect(x1 - CELL + 2.5, y + 7.5, CELL - 5, ROW - 15);
       }
+      // Flash-style markers: "a" for a frame script, a flag + name for a label.
+      let markX = x0 + CELL + 1;
+      if (k.script) {
+        g.fillStyle = "#ffd84d";
+        g.font = "bold 10px system-ui, sans-serif";
+        g.fillText("a", x0 + 2.5, y + 9);
+      }
+      if (k.label && k.duration > 1) {
+        g.fillStyle = "#ff9fc0";
+        g.font = "10px system-ui, sans-serif";
+        const text = `⚑${k.label}`;
+        g.save();
+        g.beginPath();
+        g.rect(markX, y, x1 - markX - 2, ROW);
+        g.clip();
+        g.fillText(text, markX, y + ROW / 2 + 4);
+        g.restore();
+        markX += g.measureText(text).width + 4;
+      }
       if (k.sound) {
         // Sound: a line along the span for streams (they play only while it lasts), a note for both.
         g.fillStyle = "#7fd1ff";
         if (k.sound.sync === "stream") g.fillRect(x0 + 2, y + ROW - 5, x1 - x0 - 3, 2);
         if (k.duration > 1) {
           g.font = "10px system-ui, sans-serif";
-          g.fillText("♪", x0 + CELL + 1, y + ROW / 2 + 4);
+          if (markX < x1 - 8) g.fillText("♪", markX, y + ROW / 2 + 4);
         }
       }
       // Keyframe dot: filled = has content, hollow = blank.

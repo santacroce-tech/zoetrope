@@ -29,6 +29,10 @@ pub struct KeyframeView {
     pub tween: Option<Tween>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sound: Option<SoundRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 pub fn layer_tree(project: &Project, symbol: SymbolId) -> Vec<LayerNode> {
@@ -52,6 +56,8 @@ pub fn layer_tree(project: &Project, symbol: SymbolId) -> Vec<LayerNode> {
                         empty: k.elements.is_empty(),
                         tween: k.tween.clone(),
                         sound: k.sound.clone(),
+                        label: k.label.clone(),
+                        script: k.script.clone(),
                     })
                     .collect(),
                 children: go(&l.children),

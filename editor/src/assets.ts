@@ -1,7 +1,7 @@
 // Font and audio import: pick files, check them, and embed them in the
 // project. Fonts are validated by the core; audio is decoded here first,
 // which both proves it plays and gives its duration.
-import { probeAudio } from "./audio";
+import { probeAudio } from "./runtime/audio";
 import type { Engine } from "./engine";
 import { importFiles, type PickedBinary } from "./platform";
 

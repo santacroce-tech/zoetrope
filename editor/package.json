@@ -4,15 +4,18 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "wasm": "sh ../scripts/build-wasm.sh",
+    "wasm": "sh ../scripts/build-wasm.sh && npm run player",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "player": "vite build --config vite.player.config.ts --logLevel warn"
   },
   "dependencies": {
+    "@jitl/quickjs-singlefile-browser-release-sync": "0.32.0",
     "@tauri-apps/api": "^2",
+    "quickjs-emscripten-core": "0.32.0",
     "react": "^19",
     "react-dom": "^19"
   },

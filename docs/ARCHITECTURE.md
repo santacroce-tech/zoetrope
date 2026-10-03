@@ -18,13 +18,28 @@ diverge, and the UI stays a thin shell.
 │  crates/zoetrope-core (model, edits/undo, geometry, queries,       │
 │     interaction math, render walk, file format) — no platform deps │
 └────────┬───────────────────────────────────────────────────────────┘
-         │ invoke(save_project | open_project | pick_files | read_picked_file)
+         │ invoke(save_project | open_project | export_html | pick_files | read_picked_file)
          ▼
   editor/src-tauri  (Rust native shell: dialogs + filesystem only)
 ```
 
-The exported player (Phase 8) will load the **same** `zoetrope_web_bg.wasm`
-with a minimal JS bootstrap instead of the React editor.
+**Runtime and export.** Playback (editor preview ▶ and exported HTML) is one
+module, `editor/src/runtime/`. It drives the core's runtime player, the
+script sandbox, input and audio. The exported player
+(`editor/src/player/main.ts`) is that module plus the **same**
+`zoetrope_web_bg.wasm`, bundled into one script with no editor code:
+
+```
+ editor preview (React)      exported page (player.js, no React)
+          └──────────┬──────────────┘
+          editor/src/runtime/  Runtime: ticks at the stage fps, input, audio
+             │  scriptCall / playScriptsJson        │ playAudioJson
+             ▼                                      ▼
+  ScriptHost: QuickJS sandbox (prelude.ts)    AudioEngine (WebAudio)
+             │  __host(json): the only exit
+             ▼
+  zoetrope_core::script → player::Player (clocks, goto, overrides, hit tests)
+```
 
 ## crates/zoetrope-core
 
@@ -38,7 +53,8 @@ with a minimal JS bootstrap instead of the React editor.
 | `interact` | Direct-manipulation math: `TransformSession` (move/scale/rotate/skew/pivot drags with modifiers), `EditSession` (anchor/handle/gradient drags), `PenSession` (the pen tool's state machine), snapping (grid, objects, stage), shape-tool drags (incl. polygon/star). |
 | `vector`   | Editable `VectorPath` (subpaths of anchors with bezier handles): primitive→path conversion, split/insert, delete, convert corner⇄smooth, handle constraints, nearest-point, freehand fitting (RDP simplification + Catmull-Rom smoothing), polystar. |
 | `timeline` | Keyframes, tweens and easing (presets + cubic-bezier). `evaluate_layer(layer, frame)` produces the elements shown at a frame (interpolated when tweened); also covers path morphing for shape tweens. |
-| `player`   | The runtime: a stateful tree of per-instance clocks (movie clips) plus button pointer state and events (`Press`, `Click`), and sound cues (stream positions, triggered events). `tick`, `pointer`, `render`, `sound_streams`, `take_sound_events`. Shared later by the exported player and scripting. |
+| `player`   | The runtime: a stateful tree of per-instance clocks (movie clips, each playing or stopped), button pointer state and events (`Press`, `Release`, `Click`), and sound cues (stream positions, triggered events). It also handles scripting: `goto` by frame or label, property overrides, frames entered (queuing their scripts), instances that appeared or left the stage, name lookup and hit tests. |
+| `script`   | The script bridge: `Call` (one JSON-shaped operation: timeline, play/stop, goto, get/set properties, children, hit tests, bounds) and `call(project, player, call)`. Everything a script can do goes through here, so its meaning lives in the core. See SCRIPTING.md. |
 | `text`     | Static text: shaping with rustybuzz (kerning, ligatures), wrapping, alignment, glyph outlines → `Path`. Bundles the default font (Zoetrope Sans). The only text dependency; renderers only ever fill paths. |
 | `paint`    | `Paint` (solid, linear, radial with focal point), `PaintStyle` (geometry-free tool form, fitted to shapes), `Stroke` (caps, joins, miter, dashes), `FillRule`. |
 | `geom`     | `Path` (move/line/quad/cubic/close), deterministic flattening, containment (non-zero / even-odd), outline distance, `Rect`. |
@@ -46,7 +62,7 @@ with a minimal JS bootstrap instead of the React editor.
 | `asset`    | Embedded assets (images, fonts, audio): base64 (de)serialization, PNG/JPEG/GIF header sniffing (so the core is the authority on image size), and audio container sniffing. |
 | `format`   | Versioned JSON envelope, migration chain, validation. See FORMAT.md. |
 | `outline`  | Panel views: the layer tree and per-element info. |
-| `demo`     | The built-in demo scene. |
+| `demo`     | The built-in demos: the animation scene and the scripted game ("Bee Catcher", the Phase 7 gate). |
 
 ### Clocks
 
@@ -155,11 +171,29 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
   `importAudio(name, bytes, duration)`, `assetBytes(id)` (for the platform's
   decoder), `setSound(layers, frame, sound)`, and `playAudioJson()` (during
   preview: `{ streams, events }`, where events are drained by the call).
-  `editor/src/audio.ts` (`AudioEngine`) applies that state with WebAudio. It
+  `editor/src/runtime/audio.ts` (`AudioEngine`) applies that state with
+  WebAudio, scheduling nothing while the browser keeps audio suspended. It
   decodes buffers once and preloads them before playback starts. It keeps
   each stream within 0.12 s of its cue position, starts events with their
   loops, and stops everything when playback stops. It holds no timing logic
   of its own, so the exported player can reuse it as is.
+* **Scripting**: `playScriptsJson()` drains what is due:
+  `{ removed, instances, frames }`, where `instances` are symbol scripts and
+  `frames` are frame scripts, each with its path, source and a readable
+  location. `scriptCall(json)` performs one bridge call, throwing a readable
+  error on misuse. `playFrame()` gives the runtime's root frame. The editing
+  commands are `setFrameScript`, `setFrameLabel`, `setSymbolScript` and
+  `symbolScript`. `newDemo("game")` loads the scripted demo.
+* **Script sandbox** (`editor/src/runtime/scripting.ts`): QuickJS compiled to
+  WASM, via `quickjs-emscripten-core` and the single-file release variant.
+  This is the one dependency Phase 7 adds. It's chosen because the engine is
+  separate from the page: scripts have no DOM, network or storage. It's also
+  synchronous, so `stop()` takes effect immediately, and the same build runs
+  in the editor and in exports. One VM per playback session, with a 250 ms CPU
+  budget per entry (interrupt handler), 64 MB memory and a 1 MB stack. The
+  prelude (`prelude.ts`) is the Flash-like object model. It is sugar over
+  `__host(json)`: properties, timelines, names and collisions are all
+  answered by the core.
 * **Pen**: `penDown` / `penDrag` / `penUp` / `penHover` feed the core's pen
   state machine. `penPreviewJson` returns what to draw, and `penFinish`
   creates the path. **Pencil**: the UI collects raw pointer samples and
@@ -183,6 +217,7 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 |---------|------|---------|
 | `save_project` | `contents: string, path: string \| null` | written path, or `null` if the dialog was cancelled |
 | `open_project` | — | `{ path, contents }`, or `null` if cancelled |
+| `export_html` | `contents: string, name: string` | asks where to save an exported page (`.html`) and writes it; the path, or `null` if cancelled |
 | `pick_files` | `kind: "image" \| "font" \| "audio"` | `[{ path, name }]` from a native multi-select dialog filtered by kind (`[]` if cancelled) |
 | `read_picked_file` | `path: string` | raw bytes (`ArrayBuffer`), **only** for a path just returned by `pick_files`, readable once |
 
@@ -208,3 +243,16 @@ and `tauri build` run automatically. The `wasm-bindgen` crate is pinned
 (~230 KB gzipped) in Phase 2, ~1 MB after Phase 3, and 2.37 MB after Phase 6
 (rustybuzz plus the ~97 KB bundled font). A size pass
 (`wasm-opt`, `opt-level = "s"`) is planned for the export phase.
+
+`npm run wasm` also builds the **player bundle** (`npm run player`, using
+`vite.player.config.ts`) into `editor/player-dist/player.js`, which is
+gitignored. It is one IIFE script with the core WASM and QuickJS inlined as
+base64, about 4.1 MB. The editor imports it lazily (`?raw`) when exporting, so
+the editor's own bundle doesn't grow. **Export HTML** writes one page:
+
+- the player script, inline;
+- the project file, as `<script type="application/json">`, with `<` escaped
+  as `\u003c` so the page can't be broken out of;
+- a full-window letterboxed canvas.
+
+It opens offline from `file://` and makes no network requests.

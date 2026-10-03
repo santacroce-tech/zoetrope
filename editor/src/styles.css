@@ -62,7 +62,7 @@ input[type="color"].swatch:disabled { opacity: 0.3; }
 }
 
 /* ---------- workspace ---------- */
-.workspace { flex: 1; display: grid; grid-template-columns: 52px 1fr 300px; min-height: 0; }
+.workspace { flex: 1; display: grid; grid-template-columns: 52px 1fr 300px; grid-template-rows: minmax(0, 1fr); min-height: 0; overflow: hidden; }
 
 .tools {
   display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
@@ -253,3 +253,21 @@ button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
 .seg { display: inline-flex; gap: 1px; }
 .timeline .sound-mark { fill: #7fd1ff; }
 .props .text-content { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; background: var(--field-bg, #1b1b22); color: inherit; border: 1px solid #3a3a48; border-radius: 3px; padding: 3px 5px; margin-bottom: 6px; }
+
+/* Phase 7: scripting */
+.script-editor { display: flex; flex-direction: column; gap: 6px; }
+.script-body { display: flex; border: 1px solid #3a3a48; border-radius: 3px; background: #15151b; overflow: hidden; }
+.script-gutter { margin: 0; padding: 6px 6px 6px 4px; min-width: 22px; text-align: right; color: #5f5f72; background: #1b1b22; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; overflow: hidden; user-select: none; }
+.script-body textarea { flex: 1; min-width: 0; border: 0; outline: none; resize: vertical; padding: 6px 8px; background: transparent; color: #e6e6ee; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; overflow: auto; tab-size: 2; }
+.script-actions { align-items: center; }
+.script-actions .muted { flex: 1; }
+.small { font-size: 11px; }
+.modal.wide { width: min(760px, 92vw); }
+.output-panel { flex: none; position: relative; z-index: 1; border-top: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; max-height: 160px; min-height: 90px; }
+.output-lines { overflow: auto; padding: 4px 10px; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
+.output-line { white-space: pre-wrap; }
+.output-line.error { color: #ff7b8a; }
+.output-line .where { color: #9a9aab; }
+.script-badge { font-size: 10px; color: #ffd84d; margin-left: 4px; }
+.output-toggle.has-errors { color: #ff7b8a; border-color: #ff7b8a; }
+select.menu { font-weight: 500; width: auto; flex: none; }

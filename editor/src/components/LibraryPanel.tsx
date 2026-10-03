@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ScriptEditor } from "./ScriptEditor";
 import { SYMBOL_DRAG_TYPE, SYMBOL_KIND_ICON, SYMBOL_KIND_LABEL, type Engine, type LibraryItem, type SymbolKind } from "../engine";
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 export function LibraryPanel({ engine, version, items, run, onEdit }: Props) {
   const [selected, setSelected] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<number | null>(null);
+  const [scripting, setScripting] = useState<LibraryItem | null>(null);
   const sel = items.find((i) => i.id === selected) ?? null;
 
   return (
@@ -22,6 +24,9 @@ export function LibraryPanel({ engine, version, items, run, onEdit }: Props) {
         <span className="panel-actions">
           <button title="Edit symbol" disabled={!sel} onClick={() => sel && onEdit(sel.id)}>
             ✎
+          </button>
+          <button title="Symbol script (runs for each instance as it appears)" disabled={!sel} onClick={() => sel && setScripting(sel)}>
+            {"{ }"}
           </button>
           <button title="Duplicate symbol" disabled={!sel} onClick={() => sel && run(() => setSelected(engine.duplicateSymbol(sel.id)))}>
             ⧉
@@ -95,11 +100,36 @@ export function LibraryPanel({ engine, version, items, run, onEdit }: Props) {
                 <span className="muted">
                   {item.length}f · {item.uses}×
                 </span>
+                {item.hasScript && (
+                  <span className="script-badge" title="Has a symbol script">
+                    {"{ }"}
+                  </span>
+                )}
               </span>
             </div>
           </li>
         ))}
       </ul>
+      {scripting && (
+        <div className="modal-backdrop" onClick={() => setScripting(null)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <h3>Symbol script: {scripting.name}</h3>
+            <p className="hint flush">
+              Runs once for every instance of this symbol when it appears on stage; <code>this</code> is the instance.
+            </p>
+            <ScriptEditor
+              value={engine.symbolScript(scripting.id) ?? ""}
+              onApply={(s) => run(() => engine.setSymbolScript(scripting.id, s.trim() ? s : undefined))}
+              placeholder={"this.onEnterFrame = function () {\n  this.rotation += 2;\n};"}
+              rows={20}
+              autoFocus
+            />
+            <div className="btn-row">
+              <button onClick={() => setScripting(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

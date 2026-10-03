@@ -25,7 +25,7 @@ impl Builder {
 
     fn symbol(&mut self, name: &str, kind: SymbolKind) -> SymbolId {
         let id = SymbolId(self.id());
-        self.project.symbols.push(Symbol { id, name: name.into(), kind, layers: Vec::new() });
+        self.project.symbols.push(Symbol { id, name: name.into(), kind, layers: Vec::new(), script: None });
         id
     }
 
@@ -82,34 +82,7 @@ pub fn demo_project() -> Project {
     let scene = b.symbol("Scene 1", SymbolKind::MovieClip);
     b.project.root = scene;
 
-    let petal = b.symbol("Petal", SymbolKind::Graphic);
-    let pl = b.layer(Parent::Symbol(petal), "Petal", LayerKind::Normal);
-    b.add(
-        pl,
-        "",
-        Transform::at(0.0, -52.0),
-        shape(
-            Geometry::Ellipse { width: 44.0, height: 96.0 },
-            Some(Color::rgb(0xe8, 0x6a, 0x92)),
-            Some((2.0, Color::rgb(0xa8, 0x3a, 0x62))),
-        ),
-    );
-
-    let flower = b.symbol("Flower", SymbolKind::Graphic);
-    let stem = b.layer(Parent::Symbol(flower), "Stem", LayerKind::Normal);
-    b.add(stem, "stem", Transform::at(0.0, 150.0), shape(Geometry::Rect { width: 10.0, height: 300.0 }, Some(Color::rgb(0x4c, 0x8c, 0x4a)), None));
-    let petals = b.layer(Parent::Symbol(flower), "Petals", LayerKind::Normal);
-    for i in 0..6 {
-        let t = Transform { rotation: i as f64 * 60.0, ..Default::default() };
-        b.add(petals, "", t, ElementKind::instance(petal));
-    }
-    let center = b.layer(Parent::Symbol(flower), "Center", LayerKind::Normal);
-    b.add(
-        center,
-        "center",
-        Transform::default(),
-        shape(Geometry::Ellipse { width: 56.0, height: 56.0 }, Some(Color::rgb(0xf5, 0xc5, 0x18)), Some((3.0, Color::rgb(0xb0, 0x7d, 0x10)))),
-    );
+    let flower = flower_symbol(&mut b);
 
     let scenery = b.layer(Parent::Symbol(scene), "Scenery", LayerKind::Folder);
     let bg = b.layer(Parent::Folder(scenery), "Background", LayerKind::Normal);
@@ -204,21 +177,43 @@ fn keyframes(spans: Vec<(u32, Vec<Element>, bool)>) -> Vec<Keyframe> {
 /// appearing at frames 0, 8 and 16 — so each runs its own clock, out of
 /// phase with the others — and a four-state "Button".
 fn bees_and_button(b: &mut Builder, scene: SymbolId) {
-    let el = |b: &mut Builder, name: &str, t: Transform, kind: ElementKind| {
-        let mut e = Element::new(ElementId(b.id()), kind);
-        e.name = name.into();
-        e.transform = t;
-        e
-    };
-    let copy = |b: &mut Builder, e: &Element, f: &dyn Fn(&mut Element)| {
-        let mut c = e.clone();
-        c.track = Some(e.track());
-        c.id = ElementId(b.id());
-        f(&mut c);
-        c
-    };
+    let bee = bee_symbol(b);
 
-    // --- Bee: body + stripes + wings, bobbing up and back down.
+    // --- Three bee instances arriving at frames 0, 8 and 16.
+    let bees = b.layer(Parent::Symbol(scene), "Bees", LayerKind::Normal);
+    let place = |x: f64, y: f64, s: f64| Transform { x, y, scale_x: s, scale_y: s, ..Default::default() };
+    let bee1 = el(b, "bee1", place(150.0, 130.0, 1.0), ElementKind::instance(bee));
+    let bee2 = el(b, "bee2", place(370.0, 70.0, 0.8), ElementKind::instance(bee));
+    let bee3 = el(b, "bee3", place(640.0, 160.0, 1.2), ElementKind::instance(bee));
+    let k1 = vec![copy(b, &bee1, &|_| {}), bee2.clone()];
+    let k2 = vec![copy(b, &bee1, &|_| {}), copy(b, &bee2, &|_| {}), bee3];
+    b.project.layer_mut(bees).unwrap().keyframes = keyframes(vec![(8, vec![bee1], false), (8, k1, false), (32, k2, false)]);
+
+    let button = button_symbol(b);
+    let ui = b.layer(Parent::Symbol(scene), "UI", LayerKind::Normal);
+    let btn = el(b, "playButton", Transform::at(100.0, 500.0), ElementKind::instance(button));
+    b.project.layer_mut(ui).unwrap().keyframes = keyframes(vec![(48, vec![btn], false)]);
+}
+
+fn el(b: &mut Builder, name: &str, t: Transform, kind: ElementKind) -> Element {
+    let mut e = Element::new(ElementId(b.id()), kind);
+    e.name = name.into();
+    e.transform = t;
+    e
+}
+
+/// A copy of `e` on the same track (so tweens pair them), adjusted by `f`.
+fn copy(b: &mut Builder, e: &Element, f: &dyn Fn(&mut Element)) -> Element {
+    let mut c = e.clone();
+    c.track = Some(e.track());
+    c.id = ElementId(b.id());
+    f(&mut c);
+    c
+}
+
+/// "Bee" (movie clip): body, stripes and wings bobbing up and back down
+/// over a 13-frame loop.
+fn bee_symbol(b: &mut Builder) -> SymbolId {
     let bee = b.symbol("Bee", SymbolKind::MovieClip);
     let body_layer = b.layer(Parent::Symbol(bee), "Body", LayerKind::Normal);
     let yellow = Color::rgb(0xff, 0xc8, 0x2e);
@@ -233,18 +228,11 @@ fn bees_and_button(b: &mut Builder, scene: SymbolId) {
     let up: Vec<Element> = parts.iter().map(|e| copy(b, e, &|c| c.transform.y -= 14.0)).collect();
     let down: Vec<Element> = parts.iter().map(|e| copy(b, e, &|_| {})).collect();
     b.project.layer_mut(body_layer).unwrap().keyframes = keyframes(vec![(6, parts, true), (6, up, true), (1, down, false)]);
+    bee
+}
 
-    // --- Three bee instances arriving at frames 0, 8 and 16.
-    let bees = b.layer(Parent::Symbol(scene), "Bees", LayerKind::Normal);
-    let place = |x: f64, y: f64, s: f64| Transform { x, y, scale_x: s, scale_y: s, ..Default::default() };
-    let bee1 = el(b, "bee1", place(150.0, 130.0, 1.0), ElementKind::instance(bee));
-    let bee2 = el(b, "bee2", place(370.0, 70.0, 0.8), ElementKind::instance(bee));
-    let bee3 = el(b, "bee3", place(640.0, 160.0, 1.2), ElementKind::instance(bee));
-    let k1 = vec![copy(b, &bee1, &|_| {}), bee2.clone()];
-    let k2 = vec![copy(b, &bee1, &|_| {}), copy(b, &bee2, &|_| {}), bee3];
-    b.project.layer_mut(bees).unwrap().keyframes = keyframes(vec![(8, vec![bee1], false), (8, k1, false), (32, k2, false)]);
-
-    // --- Button: Up / Over / Down / Hit.
+/// "Button": Up / Over / Down / Hit frames of a blue ▶ pill.
+fn button_symbol(b: &mut Builder) -> SymbolId {
     let button = b.symbol("Button", SymbolKind::Button);
     let face = b.layer(Parent::Symbol(button), "Face", LayerKind::Normal);
     let state = |b: &mut Builder, fill: Color, y: f64| {
@@ -258,24 +246,50 @@ fn bees_and_button(b: &mut Builder, scene: SymbolId) {
     let down_state = state(b, Color::rgb(0x25, 0x5a, 0xa8), 2.0);
     let hit = vec![el(b, "", Transform::default(), shape(Geometry::Rect { width: 140.0, height: 44.0 }, Some(Color::BLACK), None))];
     b.project.layer_mut(face).unwrap().keyframes = keyframes(vec![(1, up_state, false), (1, over_state, false), (1, down_state, false), (1, hit, false)]);
-
-    let ui = b.layer(Parent::Symbol(scene), "UI", LayerKind::Normal);
-    let btn = el(b, "playButton", Transform::at(100.0, 500.0), ElementKind::instance(button));
-    b.project.layer_mut(ui).unwrap().keyframes = keyframes(vec![(48, vec![btn], false)]);
+    button
 }
+
+/// "Flower" (graphic): a stem, six "Petal" graphic instances and a center.
+fn flower_symbol(b: &mut Builder) -> SymbolId {
+    let petal = b.symbol("Petal", SymbolKind::Graphic);
+    let pl = b.layer(Parent::Symbol(petal), "Petal", LayerKind::Normal);
+    b.add(
+        pl,
+        "",
+        Transform::at(0.0, -52.0),
+        shape(
+            Geometry::Ellipse { width: 44.0, height: 96.0 },
+            Some(Color::rgb(0xe8, 0x6a, 0x92)),
+            Some((2.0, Color::rgb(0xa8, 0x3a, 0x62))),
+        ),
+    );
+
+    let flower = b.symbol("Flower", SymbolKind::Graphic);
+    let stem = b.layer(Parent::Symbol(flower), "Stem", LayerKind::Normal);
+    b.add(stem, "stem", Transform::at(0.0, 150.0), shape(Geometry::Rect { width: 10.0, height: 300.0 }, Some(Color::rgb(0x4c, 0x8c, 0x4a)), None));
+    let petals = b.layer(Parent::Symbol(flower), "Petals", LayerKind::Normal);
+    for i in 0..6 {
+        let t = Transform { rotation: i as f64 * 60.0, ..Default::default() };
+        b.add(petals, "", t, ElementKind::instance(petal));
+    }
+    let center = b.layer(Parent::Symbol(flower), "Center", LayerKind::Normal);
+    b.add(
+        center,
+        "center",
+        Transform::default(),
+        shape(Geometry::Ellipse { width: 56.0, height: 56.0 }, Some(Color::rgb(0xf5, 0xc5, 0x18)), Some((3.0, Color::rgb(0xb0, 0x7d, 0x10)))),
+    );
+    flower
+}
+
 
 /// A title in the bundled font and a two-second chime melody streamed in
 /// sync with the main timeline (both embedded in the project).
 fn title_and_tune(b: &mut Builder, scene: SymbolId) {
     use crate::asset::{Asset, AssetKind, Bytes};
-    use crate::text::{TextAlign, TextBlock, DEFAULT_FONT, DEFAULT_FONT_NAME};
+    use crate::text::{TextAlign, TextBlock};
 
-    let font = AssetId(b.id());
-    b.project.assets.push(Asset {
-        id: font,
-        name: format!("{DEFAULT_FONT_NAME}.ttf"),
-        kind: AssetKind::Font { family: DEFAULT_FONT_NAME.into(), data: Bytes(DEFAULT_FONT.into()) },
-    });
+    let font = default_font(b);
     let title = b.layer(Parent::Symbol(scene), "Title", LayerKind::Normal);
     let block = TextBlock {
         text: "Spring in Zoetrope".into(),
@@ -306,6 +320,155 @@ fn title_and_tune(b: &mut Builder, scene: SymbolId) {
     b.project.layer_mut(sound).unwrap().keyframes =
         vec![Keyframe { sound: Some(SoundRef { asset: tune, sync: SoundSync::Stream, volume: 0.8, loops: 0 }), ..Keyframe::blank(48) }];
 }
+
+/// Embeds the bundled font.
+fn default_font(b: &mut Builder) -> AssetId {
+    use crate::asset::{Asset, AssetKind, Bytes};
+    use crate::text::{DEFAULT_FONT, DEFAULT_FONT_NAME};
+    let font = AssetId(b.id());
+    b.project.assets.push(Asset {
+        id: font,
+        name: format!("{DEFAULT_FONT_NAME}.ttf"),
+        kind: AssetKind::Font { family: DEFAULT_FONT_NAME.into(), data: Bytes(DEFAULT_FONT.into()) },
+    });
+    font
+}
+
+/// The Phase 7 gate demo, "Bee Catcher": steer the bee with the arrow keys
+/// and catch flowers before the time runs out; the button restarts. All
+/// behaviour is in frame and symbol scripts (see `GAME_PLAY_SCRIPT`).
+pub fn game_project() -> Project {
+    use crate::text::{TextAlign, TextBlock};
+    let mut b = Builder {
+        project: Project {
+            next_id: 1,
+            stage: Stage { width: 960.0, height: 540.0, background: Color::rgb(0xf4, 0xef, 0xe6), fps: 30.0 },
+            root: SymbolId(0),
+            symbols: Vec::new(),
+            assets: Vec::new(),
+        },
+    };
+    let scene = b.symbol("Bee Catcher", SymbolKind::MovieClip);
+    b.project.root = scene;
+    // The target is a flower head (no stem), so catching it means touching it.
+    let flower = flower_symbol(&mut b);
+    let blossom = b.project.symbol_mut(flower).unwrap();
+    blossom.name = "Blossom".into();
+    blossom.layers.retain(|l| l.name != "Stem");
+    blossom.script = Some(GAME_FLOWER_SCRIPT.into());
+    let bee = bee_symbol(&mut b);
+    let button = button_symbol(&mut b);
+    let font = default_font(&mut b);
+    let text = |s: &str, size: f64, color: Color, align: TextAlign, width: Option<f64>| {
+        ElementKind::Text(TextBlock {
+            text: s.into(),
+            font,
+            size,
+            fill: Paint::solid(color),
+            align,
+            letter_spacing: 0.0,
+            line_height: 1.25,
+            width,
+        })
+    };
+    let ink = Color::rgb(0x2b, 0x3a, 0x67);
+
+    let bg = b.layer(Parent::Symbol(scene), "Background", LayerKind::Normal);
+    let sky = Paint::Linear {
+        start: Point::new(0.0, -270.0),
+        end: Point::new(0.0, 270.0),
+        stops: stops(&[(0.0, Color::rgb(0x7f, 0xc4, 0xec)), (1.0, Color::rgb(0xe4, 0xf4, 0xfa))]),
+    };
+    let sky = el(&mut b, "sky", Transform::at(480.0, 270.0), painted(Geometry::Rect { width: 960.0, height: 540.0 }, Some(sky), None));
+    let ground = el(&mut b, "ground", Transform::at(480.0, 515.0), shape(Geometry::Rect { width: 960.0, height: 50.0 }, Some(Color::rgb(0x8c, 0xc0, 0x6b)), None));
+    b.project.layer_mut(bg).unwrap().keyframes = vec![Keyframe::with(2, vec![sky, ground])];
+
+    let small = Transform { x: 600.0, y: 300.0, scale_x: 0.45, scale_y: 0.45, ..Default::default() };
+    let target = b.layer(Parent::Symbol(scene), "Flower", LayerKind::Normal);
+    let f = el(&mut b, "flower", small, ElementKind::instance(flower));
+    b.project.layer_mut(target).unwrap().keyframes = vec![Keyframe::with(1, vec![f]), Keyframe::blank(1)];
+
+    let player = b.layer(Parent::Symbol(scene), "Bee", LayerKind::Normal);
+    let pb = el(&mut b, "bee", Transform::at(140.0, 300.0), ElementKind::instance(bee));
+    b.project.layer_mut(player).unwrap().keyframes = vec![Keyframe::with(1, vec![pb]), Keyframe::blank(1)];
+
+    let hud = b.layer(Parent::Symbol(scene), "HUD", LayerKind::Normal);
+    let score = el(&mut b, "scoreText", Transform::at(24.0, 16.0), text("Score: 0", 30.0, ink, TextAlign::Left, None));
+    let time = el(&mut b, "timeText", Transform::at(736.0, 16.0), text("Time: 15", 30.0, ink, TextAlign::Right, Some(200.0)));
+    let hint = el(&mut b, "", Transform::at(280.0, 22.0), text("Arrow keys: fly · catch the flowers", 20.0, ink, TextAlign::Center, Some(400.0)));
+    let restart = el(&mut b, "restartButton", Transform::at(860.0, 500.0), ElementKind::instance(button));
+    let label = el(&mut b, "", Transform::at(660.0, 488.0), text("Restart", 22.0, ink, TextAlign::Right, Some(120.0)));
+    b.project.layer_mut(hud).unwrap().keyframes = vec![Keyframe::with(2, vec![score, time, hint, restart, label])];
+
+    let message = b.layer(Parent::Symbol(scene), "Message", LayerKind::Normal);
+    let fin = el(&mut b, "finalText", Transform::at(130.0, 220.0), text("Time's up!", 48.0, ink, TextAlign::Center, Some(700.0)));
+    b.project.layer_mut(message).unwrap().keyframes = vec![Keyframe::blank(1), Keyframe::with(1, vec![fin])];
+
+    let actions = b.layer(Parent::Symbol(scene), "Actions", LayerKind::Normal);
+    b.project.layer_mut(actions).unwrap().keyframes = vec![
+        Keyframe { label: Some("play".into()), script: Some(GAME_PLAY_SCRIPT.into()), ..Keyframe::blank(1) },
+        Keyframe { label: Some("over".into()), script: Some(GAME_OVER_SCRIPT.into()), ..Keyframe::blank(1) },
+    ];
+
+    debug_assert!(b.project.validate().is_ok());
+    b.project
+}
+
+/// Frame 1 ("play") of the game demo.
+pub const GAME_PLAY_SCRIPT: &str = r#"// Bee Catcher: steer with the arrow keys, catch flowers before time runs out.
+stop();
+
+const speed = 7;
+var score = 0;                  // `var`s are properties of this timeline
+var timeLeft = 15 * stage.fps;  // in frames
+
+function placeFlower() {
+  flower.x = 80 + Math.random() * (stage.width - 160);
+  flower.y = 140 + Math.random() * (stage.height - 240);
+}
+
+function startGame() {
+  score = 0;
+  timeLeft = 15 * stage.fps;
+  bee.x = 140;
+  bee.y = 300;
+  placeFlower();
+}
+startGame();
+
+this.onEnterFrame = function () {
+  const dx = (Key.isDown("ArrowRight") ? 1 : 0) - (Key.isDown("ArrowLeft") ? 1 : 0);
+  const dy = (Key.isDown("ArrowDown") ? 1 : 0) - (Key.isDown("ArrowUp") ? 1 : 0);
+  bee.x = Math.max(30, Math.min(stage.width - 30, bee.x + dx * speed));
+  bee.y = Math.max(80, Math.min(stage.height - 40, bee.y + dy * speed));
+  if (bee.hitTestObject(flower)) {
+    score += 1;
+    placeFlower();
+  }
+  timeLeft -= 1;
+  scoreText.text = "Score: " + score;
+  timeText.text = "Time: " + Math.ceil(timeLeft / stage.fps);
+  if (timeLeft <= 0) gotoAndStop("over");
+};
+
+restartButton.onClick = startGame;
+"#;
+
+/// Frame 2 ("over") of the game demo.
+pub const GAME_OVER_SCRIPT: &str = r#"stop();
+this.onEnterFrame = null;
+timeText.text = "Time: 0";
+finalText.text = "Time's up! You caught " + score + (score === 1 ? " flower." : " flowers.");
+restartButton.onClick = function () {
+  gotoAndStop("play");
+};
+"#;
+
+/// Symbol script of the game's Blossom: every blossom spins on its own.
+pub const GAME_FLOWER_SCRIPT: &str = r#"this.onEnterFrame = function () {
+  this.rotation += 3;
+};
+"#;
 
 /// A synthesized 2-second, 16-bit mono 22.05 kHz WAV: a little arpeggio of
 /// soft bell tones (deterministic, no external audio needed).

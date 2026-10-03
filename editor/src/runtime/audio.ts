@@ -2,7 +2,7 @@
 // *what* plays *when* (stream positions, event triggers); this module only
 // decodes and schedules it with WebAudio. Shared by the editor preview and,
 // later, the exported player.
-import type { Engine, SoundCue } from "./engine";
+import type { Engine, SoundCue } from "../engine";
 
 /** Restart a stream if it drifts further than this from the timeline (seconds). */
 const MAX_DRIFT = 0.12;
@@ -36,8 +36,14 @@ export class AudioEngine {
 
   /** Decodes every audio asset that isn't decoded yet (call before playing). */
   async preload(assetIds: number[]): Promise<void> {
-    if (this.ctx.state === "suspended") await this.ctx.resume();
+    // Don't wait for resume(): without a user gesture it never settles.
+    void this.resume();
     await Promise.all(assetIds.map((id) => this.load(id)));
+  }
+
+  /** Browsers start audio suspended until a user gesture; call from input handlers. */
+  async resume(): Promise<void> {
+    if (this.ctx.state === "suspended") await this.ctx.resume();
   }
 
   private load(id: number): Promise<void> {
@@ -58,6 +64,10 @@ export class AudioEngine {
 
   /** Applies the runtime's current sound state. */
   sync(state: { streams: SoundCue[]; events: SoundCue[] }) {
+    // Until the page gets a user gesture the browser keeps audio suspended
+    // (its clock is frozen): schedule nothing. Streams pick up at the right
+    // position on the first sync after it resumes; events meanwhile are lost.
+    if (this.ctx.state !== "running") return;
     const now = this.ctx.currentTime;
     const wanted = new Set<string>();
     for (const cue of state.streams) {

@@ -1075,10 +1075,11 @@ fn buttons_respond_to_the_pointer() {
     assert!(matches!(&press[..], [PlayerEvent::Press { name, .. }] if name == "playButton"));
     assert_eq!(frame_of_button(&pl), 2, "down");
     let click = pl.pointer(&p, Some(Point::new(112.0, 506.0)), false);
-    assert!(matches!(&click[..], [PlayerEvent::Click { name, .. }] if name == "playButton"));
-    // Pressing then releasing outside is not a click.
+    assert!(matches!(&click[..], [PlayerEvent::Release { .. }, PlayerEvent::Click { name, .. }] if name == "playButton"));
+    // Pressing then releasing outside is a release but not a click.
     pl.pointer(&p, Some(Point::new(110.0, 505.0)), true);
-    assert!(pl.pointer(&p, Some(Point::new(600.0, 100.0)), false).is_empty());
+    let outside = pl.pointer(&p, Some(Point::new(600.0, 100.0)), false);
+    assert!(matches!(&outside[..], [PlayerEvent::Release { name, .. }] if name == "playButton"));
     // The Hit frame is never drawn: the button renders its Up art (2 fills).
     let ops_ = record_player(&p, &pl);
     assert!(ops_.iter().all(|o| !matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, .. } if *color == Color::BLACK)));
@@ -1301,4 +1302,164 @@ fn v3_files_load_as_v4() {
     v["schemaVersion"] = json!(3);
     let p = load_from_str(&v.to_string()).unwrap();
     assert_eq!(p, demo_project());
+}
+
+// ---------------------------------------------------------------- Phase 7: scripting runtime
+
+use zoetrope_core::demo::{game_project, GAME_OVER_SCRIPT, GAME_PLAY_SCRIPT};
+use zoetrope_core::player::{FrameTarget, Override};
+use zoetrope_core::script::{self, Call};
+
+fn script_call(p: &Project, pl: &mut Player, v: Value) -> Value {
+    script::call(p, pl, serde_json::from_value::<Call>(v).unwrap()).unwrap()
+}
+
+#[test]
+fn game_demo_is_valid_and_round_trips() {
+    let p = game_project();
+    p.validate().unwrap();
+    let json = save_to_string(&p);
+    assert_eq!(load_from_str(&json).unwrap(), p);
+    assert!(json.contains("\"schemaVersion\": 5"));
+}
+
+#[test]
+fn entering_frames_queues_frame_and_symbol_scripts() {
+    let p = game_project();
+    let mut pl = Player::new(&p, 0);
+    let frames = pl.take_frame_scripts(&p);
+    assert_eq!(frames.len(), 1);
+    assert_eq!((frames[0].path.len(), frames[0].frame, frames[0].script.as_str()), (0, 0, GAME_PLAY_SCRIPT));
+    assert_eq!(script::frame_script_location(&p, frames[0].symbol, frames[0].layer, 0), "Bee Catcher › Actions › frame 1");
+    // The flower's symbol script runs for its instance; the bee has none.
+    let inst = pl.take_instance_scripts(&p);
+    assert_eq!(inst.len(), 1);
+    assert_eq!(pl.resolve(&p, &inst[0].path).unwrap().element.name, "flower");
+    // Nothing is due again until a frame is entered.
+    assert!(pl.take_frame_scripts(&p).is_empty());
+
+    // stop() holds the root; movie clips keep playing.
+    script_call(&p, &mut pl, json!({"op": "stop", "path": []}));
+    let bee = pl.child_named(&p, &[], "bee").unwrap();
+    let bee_frame = pl.timeline(&p, &bee).unwrap().frame;
+    pl.tick(&p);
+    assert_eq!(pl.frame, 0);
+    assert!(pl.take_frame_scripts(&p).is_empty(), "a stopped root doesn't re-enter its frame");
+    assert_eq!(pl.timeline(&p, &bee).unwrap().frame, bee_frame + 1);
+    // ...unless stopped themselves.
+    script_call(&p, &mut pl, json!({"op": "stop", "path": bee}));
+    pl.tick(&p);
+    assert_eq!(pl.timeline(&p, &bee).unwrap(), zoetrope_core::player::TimelineState { frame: bee_frame + 1, length: 13, playing: false });
+
+    // Jumping by label enters the frame: its script is due, and the bee and
+    // flower, which only exist on frame 1, leave the stage.
+    script_call(&p, &mut pl, json!({"op": "goto", "path": [], "frame": "over", "play": false}));
+    assert_eq!(pl.frame, 1);
+    let over = pl.take_frame_scripts(&p);
+    assert_eq!(over.iter().map(|f| f.script.as_str()).collect::<Vec<_>>(), [GAME_OVER_SCRIPT]);
+    let removed = pl.take_removed();
+    assert!(removed.contains(&bee));
+    assert_eq!(removed.len(), 8, "bee, flower and the flower's six petals");
+    assert!(pl.child_named(&p, &[], "bee").is_none());
+    // Back to "play" (0-based index 0 works too): a fresh bee and flower.
+    script_call(&p, &mut pl, json!({"op": "goto", "path": [], "frame": 0, "play": false}));
+    assert_eq!(pl.take_frame_scripts(&p).len(), 1);
+    assert_eq!(pl.take_instance_scripts(&p).len(), 1, "the new flower runs its symbol script again");
+    assert_eq!(pl.timeline(&p, &bee).unwrap().frame, 0, "the new bee starts from its first frame");
+    // Errors are reported, not ignored.
+    assert!(script::call(&p, &mut pl, Call::Goto { path: vec![], frame: FrameTarget::Label("nope".into()), play: true }).is_err());
+    let flower = pl.child_named(&p, &[], "flower").unwrap();
+    assert!(script::call(&p, &mut pl, Call::Stop { path: flower.clone() }).is_err(), "graphics have no playhead");
+}
+
+#[test]
+fn scripted_properties_override_the_timeline() {
+    let p = game_project();
+    let mut pl = Player::new(&p, 0);
+    pl.set_playing(&p, &[], false).unwrap();
+    let bee = pl.child_named(&p, &[], "bee").unwrap();
+    let flower = pl.child_named(&p, &[], "flower").unwrap();
+    let props = script_call(&p, &mut pl, json!({"op": "get", "path": bee}));
+    assert_eq!((props["kind"].as_str(), props["x"].as_f64(), props["symbol"].as_str()), (Some("movieClip"), Some(140.0), Some("Bee")));
+    assert!(!pl.hit_test_object(&p, &bee, &flower));
+
+    // Move the bee onto the flower: rendering, bounds and collisions follow.
+    script_call(&p, &mut pl, json!({"op": "set", "path": bee, "props": {"x": 600.0, "y": 300.0, "rotation": 30.0}}));
+    assert_eq!(script_call(&p, &mut pl, json!({"op": "get", "path": bee}))["x"], 600.0);
+    assert!(pl.hit_test_object(&p, &bee, &flower));
+    assert!(pl.hit_test_point(&p, &bee, Point::new(600.0, 300.0), true));
+    assert!(!pl.hit_test_point(&p, &bee, Point::new(140.0, 300.0), false));
+    let moved = record_player(&p, &pl);
+    assert!(moved.iter().any(|o| matches!(o, DrawOp::Fill { transform, .. } if (transform.e - 600.0).abs() < 30.0)));
+    // The override survives ticks (the timeline no longer moves it).
+    pl.tick(&p);
+    assert_eq!(pl.resolve(&p, &bee).unwrap().element.transform.x, 600.0);
+
+    // Invisible objects don't draw or collide.
+    let before = record_player(&p, &pl).len();
+    script_call(&p, &mut pl, json!({"op": "set", "path": bee, "props": {"visible": false}}));
+    assert!(record_player(&p, &pl).len() < before);
+    assert!(!pl.hit_test_object(&p, &bee, &flower));
+
+    // Text content can be scripted (and only on text).
+    let score = pl.child_named(&p, &[], "scoreText").unwrap();
+    script_call(&p, &mut pl, json!({"op": "set", "path": score, "props": {"text": "Score: 42"}}));
+    assert_eq!(script_call(&p, &mut pl, json!({"op": "get", "path": score}))["text"], "Score: 42");
+    assert!(script::call(&p, &mut pl, Call::Set { path: flower.clone(), props: Override { text: Some("x".into()), ..Default::default() } }).is_err());
+    assert!(script::call(&p, &mut pl, Call::Set { path: flower, props: Override { x: Some(f64::NAN), ..Default::default() } }).is_err());
+
+    let names: Vec<String> = script_call(&p, &mut pl, json!({"op": "children", "path": []}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect();
+    for n in ["flower", "bee", "scoreText", "timeText", "restartButton"] {
+        assert!(names.iter().any(|m| m == n), "{n} in {names:?}");
+    }
+    let b = script_call(&p, &mut pl, json!({"op": "bounds", "path": score}));
+    assert!(b["width"].as_f64().unwrap() > 50.0);
+}
+
+#[test]
+fn scripted_buttons_move_their_hit_area() {
+    let p = game_project();
+    let mut pl = Player::new(&p, 0);
+    let button = pl.child_named(&p, &[], "restartButton").unwrap();
+    pl.pointer(&p, Some(Point::new(860.0, 500.0)), false);
+    assert!(pl.over_button());
+    pl.set_properties(&p, &button, Override { x: Some(100.0), ..Default::default() }).unwrap();
+    assert!(!pl.over_button());
+    pl.pointer(&p, Some(Point::new(100.0, 500.0)), true);
+    let events = pl.pointer(&p, Some(Point::new(100.0, 500.0)), false);
+    assert!(matches!(&events[..], [PlayerEvent::Release { name, .. }, PlayerEvent::Click { path, .. }] if name == "restartButton" && *path == button));
+}
+
+#[test]
+fn frame_labels_and_scripts_are_editable_and_undoable() {
+    let mut doc = Document::new(demo_project());
+    let ui = layer_named(&doc.project, "UI");
+    ops::set_frame_script(&mut doc, &[ui], 5, Some("stop();")).unwrap();
+    ops::set_frame_label(&mut doc, &[ui], 5, Some("  intro ")).unwrap();
+    let k = &doc.project.layer(ui).unwrap().keyframes[0];
+    assert_eq!((k.script.as_deref(), k.label.as_deref()), (Some("stop();"), Some("intro")));
+    // Blank text removes them.
+    ops::set_frame_label(&mut doc, &[ui], 0, Some(" ")).unwrap();
+    assert_eq!(doc.project.layer(ui).unwrap().keyframes[0].label, None);
+    let bee = doc.project.symbols.iter().find(|s| s.name == "Bee").unwrap().id;
+    ops::set_symbol_script(&mut doc, bee, Some("this.alpha = 0.5;")).unwrap();
+    assert_eq!(doc.project.symbol(bee).unwrap().script.as_deref(), Some("this.alpha = 0.5;"));
+    let json = save_to_string(&doc.project);
+    assert_eq!(load_from_str(&json).unwrap(), doc.project);
+    for _ in 0..4 {
+        doc.undo().unwrap();
+    }
+    assert_eq!(doc.project, demo_project());
+}
+
+#[test]
+fn v4_files_load_as_v5() {
+    let mut v: Value = serde_json::from_str(&save_to_string(&demo_project())).unwrap();
+    v["schemaVersion"] = json!(4);
+    assert_eq!(load_from_str(&v.to_string()).unwrap(), demo_project());
 }

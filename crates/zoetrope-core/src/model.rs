@@ -89,6 +89,10 @@ pub struct Symbol {
     #[serde(default)]
     pub kind: SymbolKind,
     pub layers: Vec<Layer>,
+    /// Symbol script (JavaScript), run once for every instance when it
+    /// appears on stage, with `this` = the instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

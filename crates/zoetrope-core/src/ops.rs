@@ -1005,7 +1005,7 @@ pub fn convert_to_symbol(
     let duration = if kind == SymbolKind::Button { 4 } else { 1 };
     let mut layer = Layer::new(layer_id, "Layer 1", LayerKind::Normal);
     layer.keyframes = vec![Keyframe::blank(duration)];
-    let symbol = Symbol { id: symbol_id, name: name.trim().to_string(), kind, layers: vec![layer] };
+    let symbol = Symbol { id: symbol_id, name: name.trim().to_string(), kind, layers: vec![layer], script: None };
 
     let mut instance = Element::new(ElementId(doc.project.alloc_id()), ElementKind::instance(symbol_id));
     instance.transform = Transform::at(c.x, c.y);
@@ -1060,7 +1060,7 @@ pub fn duplicate_symbol(doc: &mut Document, symbol: SymbolId) -> Result<SymbolId
     }
     let mut layers = src.layers.clone();
     refresh(&mut doc.project, &mut layers);
-    let copy = Symbol { id, name: format!("{} copy", src.name), kind: src.kind, layers };
+    let copy = Symbol { id, name: format!("{} copy", src.name), kind: src.kind, layers, script: src.script.clone() };
     doc.execute("Duplicate Symbol", vec![Edit::InsertSymbol { index: doc.project.symbols.len(), symbol: copy }])?;
     Ok(id)
 }
@@ -1197,6 +1197,43 @@ pub fn import_audio(doc: &mut Document, name: &str, data: &[u8], duration: f64) 
     let asset = Asset { id, name: name.to_string(), kind: AssetKind::Audio { mime: mime.into(), duration, data: Bytes(data.into()) } };
     doc.execute("Import Audio", vec![Edit::InsertAsset { index: doc.project.assets.len(), asset }])?;
     Ok(id)
+}
+
+/// Blank or whitespace-only text means "none".
+fn non_blank(s: Option<&str>) -> Option<String> {
+    s.filter(|s| !s.trim().is_empty()).map(str::to_string)
+}
+
+/// Sets (or with `None` / blank text, removes) the frame script on the
+/// keyframe spanning `frame` of each layer.
+pub fn set_frame_script(doc: &mut Document, layers: &[LayerId], frame: u32, script: Option<&str>) -> Result<()> {
+    let script = non_blank(script);
+    edit_timeline(doc, layers, "Frame Script", |_, l| {
+        let Some((i, _)) = l.keyframe_at(frame) else { return Err(Error::Invalid("no frame there: insert one first (F5)".into())) };
+        let mut kfs = l.keyframes.clone();
+        kfs[i].script = script.clone();
+        Ok(Some(kfs))
+    })
+}
+
+/// Sets (or with `None` / blank text, removes) the label of the keyframe spanning `frame`.
+pub fn set_frame_label(doc: &mut Document, layers: &[LayerId], frame: u32, label: Option<&str>) -> Result<()> {
+    let label = non_blank(label.map(str::trim));
+    edit_timeline(doc, layers, "Frame Label", |_, l| {
+        let Some((i, _)) = l.keyframe_at(frame) else { return Err(Error::Invalid("no frame there: insert one first (F5)".into())) };
+        let mut kfs = l.keyframes.clone();
+        kfs[i].label = label.clone();
+        Ok(Some(kfs))
+    })
+}
+
+/// Sets (or with `None` / blank text, removes) a symbol's script.
+pub fn set_symbol_script(doc: &mut Document, symbol: SymbolId, script: Option<&str>) -> Result<()> {
+    let script = non_blank(script);
+    if doc.project.require_symbol(symbol)?.script == script {
+        return Ok(());
+    }
+    doc.execute("Symbol Script", vec![Edit::SetSymbolScript { symbol, script }])
 }
 
 /// Attaches (or with `None`, removes) a sound on the keyframe spanning `frame`.
