@@ -81,7 +81,8 @@ pub fn duplicate_elements(doc: &mut Document, ids: &[ElementId], dx: f64, dy: f6
         copy.transform.x += dx;
         copy.transform.y += dy;
         new_ids.push(copy.id);
-        let edit = Edit::InsertElement { layer: loc.layer, index: loc.index + 1, element: copy };
+        copy.track = None;
+        let edit = Edit::InsertElement { layer: loc.layer, keyframe: loc.keyframe, index: loc.index + 1, element: copy };
         edit.clone().apply(&mut scratch)?;
         edits.push(edit);
     }
@@ -149,9 +150,9 @@ pub fn patch_elements(doc: &mut Document, ids: &[ElementId], patch: &Value) -> R
 
 /// Sets an element's scale so its content box measures `width`×`height`
 /// (before rotation/skew). Zero-sized content axes are left unchanged.
-pub fn set_element_size(doc: &mut Document, id: ElementId, width: f64, height: f64) -> Result<()> {
+pub fn set_element_size(doc: &mut Document, id: ElementId, width: f64, height: f64, frame: u32) -> Result<()> {
     let e = doc.project.require_element(id)?;
-    let content = crate::query::content_bounds(&doc.project, &e.kind, &crate::math::Matrix::IDENTITY, 0)
+    let content = crate::query::content_bounds(&doc.project, &e.kind, &crate::math::Matrix::IDENTITY, frame, 0)
         .ok_or_else(|| Error::Invalid("element has no size".into()))?;
     let mut t = e.transform;
     if content.width() > 1e-9 {
@@ -249,27 +250,55 @@ pub fn create_shape(
     mods: Modifiers,
     opts: &ShapeOptions,
     style: &ShapeStyle,
+    frame: u32,
 ) -> Result<Option<ElementId>> {
     check_target_layer(&doc.project, layer)?;
     let Some(drag) = shape_from_drag(tool, p0, p1, mods, opts) else { return Ok(None) };
     let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Shape(style.make_shape(drag.geometry)));
     el.transform = Transform::at(drag.center.x, drag.center.y);
     let id = el.id;
-    let index = doc.project.require_layer(layer)?.elements.len();
     let label = match tool {
         ShapeTool::Rect => "Rectangle",
         ShapeTool::Ellipse => "Ellipse",
         ShapeTool::Line => "Line",
         ShapeTool::Polygon => "Polygon",
     };
-    doc.execute(label, vec![Edit::InsertElement { layer, index, element: el }])?;
+    let edits = place_on_top(&doc.project, layer, frame, vec![el])?;
+    doc.execute(label, edits)?;
     Ok(Some(id))
+}
+
+/// Edits that put `elements` on top of `layer`'s keyframe at `frame`. If the
+/// layer ends before `frame`, it is first extended with a blank keyframe
+/// there (the last span stretches to fill the gap), as one transaction.
+fn place_on_top(p: &Project, layer: LayerId, frame: u32, elements: Vec<Element>) -> Result<Vec<Edit>> {
+    let l = p.require_layer(layer)?;
+    let mut edits = Vec::new();
+    let keyframe = match l.keyframe_at(frame) {
+        Some((i, _)) => i,
+        None => {
+            let mut kfs = l.keyframes.clone();
+            let gap = frame - l.length();
+            if let Some(last) = kfs.last_mut() {
+                last.duration += gap;
+            }
+            kfs.push(Keyframe::blank(1));
+            let i = kfs.len() - 1;
+            edits.push(Edit::SetKeyframes { layer, keyframes: kfs });
+            i
+        }
+    };
+    let base = l.keyframes.get(keyframe).map_or(0, |k| k.elements.len());
+    for (n, element) in elements.into_iter().enumerate() {
+        edits.push(Edit::InsertElement { layer, keyframe, index: base + n, element });
+    }
+    Ok(edits)
 }
 
 /// Creates a path element from a path in stage coordinates (pen/pencil).
 /// The element is positioned at the path's bounds center, which becomes its
 /// pivot.
-pub fn create_path(doc: &mut Document, layer: LayerId, mut path: VectorPath, style: &ShapeStyle, label: &str) -> Result<ElementId> {
+pub fn create_path(doc: &mut Document, layer: LayerId, mut path: VectorPath, style: &ShapeStyle, label: &str, frame: u32) -> Result<ElementId> {
     check_target_layer(&doc.project, layer)?;
     path.validate()?;
     let c = path.to_path().bounds(&Matrix::IDENTITY).ok_or_else(|| Error::Invalid("empty path".into()))?.center();
@@ -277,8 +306,8 @@ pub fn create_path(doc: &mut Document, layer: LayerId, mut path: VectorPath, sty
     let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Shape(style.make_shape(Geometry::Path(path))));
     el.transform = Transform::at(c.x, c.y);
     let id = el.id;
-    let index = doc.project.require_layer(layer)?.elements.len();
-    doc.execute(label, vec![Edit::InsertElement { layer, index, element: el }])?;
+    let edits = place_on_top(&doc.project, layer, frame, vec![el])?;
+    doc.execute(label, edits)?;
     Ok(id)
 }
 
@@ -292,10 +321,11 @@ pub fn create_freehand(
     smooth: bool,
     tolerance: f64,
     style: &ShapeStyle,
+    frame: u32,
 ) -> Result<Option<ElementId>> {
     check_target_layer(&doc.project, layer)?;
     let Some(path) = freehand(points, tolerance, smooth, tolerance * 4.0) else { return Ok(None) };
-    create_path(doc, layer, path, style, "Pencil").map(Some)
+    create_path(doc, layer, path, style, "Pencil", frame).map(Some)
 }
 
 fn shape_mut(e: &mut Element) -> Result<&mut Shape> {
@@ -406,7 +436,7 @@ pub fn set_paint_style(doc: &mut Document, ids: &[ElementId], part: PaintPart, s
 }
 
 /// Embeds an image and places it centered at `at` on top of `layer`.
-pub fn import_image(doc: &mut Document, layer: LayerId, name: &str, data: &[u8], at: Point) -> Result<ElementId> {
+pub fn import_image(doc: &mut Document, layer: LayerId, name: &str, data: &[u8], at: Point, frame: u32) -> Result<ElementId> {
     check_target_layer(&doc.project, layer)?;
     let info = sniff_image(data)?;
     let asset_id = AssetId(doc.project.alloc_id());
@@ -419,14 +449,9 @@ pub fn import_image(doc: &mut Document, layer: LayerId, name: &str, data: &[u8],
     el.name = name.to_string();
     el.transform = Transform::at(at.x, at.y);
     let id = el.id;
-    let index = doc.project.require_layer(layer)?.elements.len();
-    doc.execute(
-        "Import Image",
-        vec![
-            Edit::InsertAsset { index: doc.project.assets.len(), asset },
-            Edit::InsertElement { layer, index, element: el },
-        ],
-    )?;
+    let mut edits = vec![Edit::InsertAsset { index: doc.project.assets.len(), asset }];
+    edits.extend(place_on_top(&doc.project, layer, frame, vec![el])?);
+    doc.execute("Import Image", edits)?;
     Ok(id)
 }
 
@@ -452,11 +477,11 @@ pub enum Distribute {
     SpaceY,
 }
 
-fn bounds_of(p: &Project, ids: &[ElementId]) -> Result<Vec<(ElementId, Rect)>> {
+fn bounds_of(p: &Project, ids: &[ElementId], frame: u32) -> Result<Vec<(ElementId, Rect)>> {
     ids.iter()
         .map(|id| {
             let e = p.require_element(*id)?;
-            Ok((*id, element_bounds(p, e).ok_or_else(|| Error::Invalid("element has no bounds".into()))?))
+            Ok((*id, element_bounds(p, e, frame).ok_or_else(|| Error::Invalid("element has no bounds".into()))?))
         })
         .collect()
 }
@@ -476,8 +501,8 @@ fn translate_edits(p: &Project, moves: impl IntoIterator<Item = (ElementId, f64,
 
 /// Aligns elements to their combined bounds, or to the stage when
 /// `to_stage` is set (always the case for a single element).
-pub fn align(doc: &mut Document, ids: &[ElementId], mode: Align, to_stage: bool) -> Result<()> {
-    let items = bounds_of(&doc.project, ids)?;
+pub fn align(doc: &mut Document, ids: &[ElementId], mode: Align, to_stage: bool, frame: u32) -> Result<()> {
+    let items = bounds_of(&doc.project, ids, frame)?;
     let reference = if to_stage || items.len() == 1 {
         Rect::new(0.0, 0.0, doc.project.stage.width, doc.project.stage.height)
     } else {
@@ -501,8 +526,8 @@ pub fn align(doc: &mut Document, ids: &[ElementId], mode: Align, to_stage: bool)
 
 /// Distributes elements between the outermost ones (or across the stage
 /// when `to_stage`). Needs at least 2 elements (3 unless `to_stage`).
-pub fn distribute(doc: &mut Document, ids: &[ElementId], mode: Distribute, to_stage: bool) -> Result<()> {
-    let mut items = bounds_of(&doc.project, ids)?;
+pub fn distribute(doc: &mut Document, ids: &[ElementId], mode: Distribute, to_stage: bool, frame: u32) -> Result<()> {
+    let mut items = bounds_of(&doc.project, ids, frame)?;
     if items.len() < if to_stage { 2 } else { 3 } {
         return Err(Error::Invalid("select at least three objects to distribute".into()));
     }
@@ -560,16 +585,16 @@ pub enum Arrange {
 
 /// Changes z-order within each element's layer.
 pub fn arrange(doc: &mut Document, ids: &[ElementId], op: Arrange) -> Result<()> {
-    let mut layers: Vec<LayerId> = Vec::new();
+    let mut slots: Vec<(LayerId, usize)> = Vec::new();
     for id in ids {
         let loc = doc.project.locate(*id).ok_or_else(|| not_found(*id))?;
-        if !layers.contains(&loc.layer) {
-            layers.push(loc.layer);
+        if !slots.contains(&(loc.layer, loc.keyframe)) {
+            slots.push((loc.layer, loc.keyframe));
         }
     }
     let mut edits = Vec::new();
-    for layer in layers {
-        let old: Vec<ElementId> = doc.project.require_layer(layer)?.elements.iter().map(|e| e.id).collect();
+    for (layer, keyframe) in slots {
+        let old: Vec<ElementId> = doc.project.require_layer(layer)?.keyframes[keyframe].elements.iter().map(|e| e.id).collect();
         let sel = |id: &ElementId| ids.contains(id);
         let mut order = old.clone();
         match op {
@@ -591,18 +616,18 @@ pub fn arrange(doc: &mut Document, ids: &[ElementId], op: Arrange) -> Result<()>
             }
         }
         if order != old {
-            edits.push(Edit::ReorderElements { layer, order });
+            edits.push(Edit::ReorderElements { layer, keyframe, order });
         }
     }
     doc.execute("Arrange", edits)
 }
 
-/// Moves elements to the top of another layer in the same symbol.
-pub fn move_to_layer(doc: &mut Document, ids: &[ElementId], layer: LayerId) -> Result<()> {
+/// Moves elements to the top of `layer`'s keyframe at `frame` (same symbol).
+pub fn move_to_layer(doc: &mut Document, ids: &[ElementId], layer: LayerId, frame: u32) -> Result<()> {
     check_target_layer(&doc.project, layer)?;
     let target_symbol = doc.project.locate_layer(layer).unwrap().symbol;
-    let mut edits = Vec::new();
-    let mut index = doc.project.require_layer(layer)?.elements.len();
+    let mut removals = Vec::new();
+    let mut moved = Vec::new();
     for id in ids {
         let loc = doc.project.locate(*id).ok_or_else(|| not_found(*id))?;
         if loc.symbol != target_symbol {
@@ -611,11 +636,11 @@ pub fn move_to_layer(doc: &mut Document, ids: &[ElementId], layer: LayerId) -> R
         if loc.layer == layer {
             continue;
         }
-        let element = doc.project.element(*id).unwrap().clone();
-        edits.push(Edit::RemoveElement { element: *id });
-        edits.push(Edit::InsertElement { layer, index, element });
-        index += 1;
+        removals.push(Edit::RemoveElement { element: *id });
+        moved.push(doc.project.element(*id).unwrap().clone());
     }
+    let mut edits = removals;
+    edits.extend(place_on_top(&doc.project, layer, frame, moved)?);
     doc.execute("Move to Layer", edits)
 }
 
@@ -735,4 +760,162 @@ pub fn move_layer(doc: &mut Document, id: LayerId, parent: Option<LayerId>, inde
         "Move Layer",
         vec![Edit::RemoveLayer { layer: id }, Edit::InsertLayer { symbol: loc.symbol, parent, index, layer }],
     )
+}
+
+// ---------------------------------------------------------------- timeline
+
+/// Applies `f` to each content layer's keyframe list (folders are skipped)
+/// and records the changed ones as one undo step.
+fn edit_timeline(
+    doc: &mut Document,
+    layers: &[LayerId],
+    label: &str,
+    mut f: impl FnMut(&mut Project, &Layer) -> Result<Option<Vec<Keyframe>>>,
+) -> Result<()> {
+    let mut edits = Vec::new();
+    for id in layers {
+        let layer = doc.project.require_layer(*id)?.clone();
+        if layer.is_folder() {
+            continue;
+        }
+        if let Some(kfs) = f(&mut doc.project, &layer)? {
+            if kfs != layer.keyframes {
+                edits.push(Edit::SetKeyframes { layer: *id, keyframes: kfs });
+            }
+        }
+    }
+    doc.execute(label, edits)
+}
+
+/// Lengthens the span at `frame` by `count` (F5). Past a layer's end, the
+/// last span is stretched to reach `frame` instead.
+pub fn insert_frames(doc: &mut Document, layers: &[LayerId], frame: u32, count: u32) -> Result<()> {
+    edit_timeline(doc, layers, "Insert Frame", |_, l| {
+        let mut kfs = l.keyframes.clone();
+        match l.keyframe_at(frame) {
+            Some((i, _)) => kfs[i].duration += count.max(1),
+            None => kfs.last_mut().expect("content layers have keyframes").duration += frame + 1 - l.length(),
+        }
+        Ok(Some(kfs))
+    })
+}
+
+/// Shortens the span at `frame` by one (⇧F5); a span reduced to nothing is
+/// removed. A layer always keeps at least one (blank) keyframe.
+pub fn remove_frames(doc: &mut Document, layers: &[LayerId], frame: u32, count: u32) -> Result<()> {
+    edit_timeline(doc, layers, "Remove Frame", |_, l| {
+        let mut kfs = l.keyframes.clone();
+        for _ in 0..count.max(1) {
+            let probe = Layer { keyframes: kfs.clone(), ..l.clone() };
+            let Some((i, _)) = probe.keyframe_at(frame) else { break };
+            kfs[i].duration -= 1;
+            if kfs[i].duration == 0 {
+                kfs.remove(i);
+            }
+        }
+        if kfs.is_empty() {
+            kfs.push(Keyframe::blank(1));
+        }
+        Ok(Some(kfs))
+    })
+}
+
+/// Makes `frame` a keyframe (F6), copying what the layer shows there —
+/// including the interpolated state inside a tween — or empty (`blank`, F7).
+/// Copies get fresh ids but keep their tracks, so tweens pair them up.
+pub fn insert_keyframe(doc: &mut Document, layers: &[LayerId], frame: u32, blank: bool) -> Result<()> {
+    let label = if blank { "Insert Blank Keyframe" } else { "Insert Keyframe" };
+    edit_timeline(doc, layers, label, |p, l| {
+        let mut kfs = l.keyframes.clone();
+        let copies = |p: &mut Project, at: u32| -> Vec<Element> {
+            if blank {
+                return Vec::new();
+            }
+            crate::timeline::evaluate_layer(l, at)
+                .into_iter()
+                .map(|e| {
+                    let mut c = e.into_owned();
+                    c.track = Some(c.track());
+                    c.id = ElementId(p.alloc_id());
+                    c
+                })
+                .collect()
+        };
+        match l.keyframe_at(frame) {
+            Some((_, start)) if start == frame => {
+                if !blank {
+                    return Ok(None); // already a keyframe
+                }
+                // F7 on a keyframe: insert the blank keyframe right after it.
+                return insert_blank_after(l, frame);
+            }
+            Some((i, start)) => {
+                let elements = copies(p, frame);
+                let end = start + kfs[i].duration;
+                kfs[i].duration = frame - start;
+                let tween = kfs[i].tween.clone();
+                kfs.insert(i + 1, Keyframe { duration: end - frame, elements, tween });
+            }
+            None => {
+                let len = l.length();
+                let elements = copies(p, len.saturating_sub(1));
+                kfs.last_mut().expect("content layers have keyframes").duration += frame - len;
+                kfs.push(Keyframe { duration: 1, elements, tween: None });
+            }
+        }
+        Ok(Some(kfs))
+    })
+}
+
+fn insert_blank_after(l: &Layer, frame: u32) -> Result<Option<Vec<Keyframe>>> {
+    let mut kfs = l.keyframes.clone();
+    let (i, _) = l.keyframe_at(frame).expect("keyframe exists");
+    if kfs[i].duration > 1 {
+        let rest = kfs[i].duration - 1;
+        kfs[i].duration = 1;
+        kfs.insert(i + 1, Keyframe::blank(rest));
+    } else {
+        kfs.insert(i + 1, Keyframe::blank(1));
+    }
+    Ok(Some(kfs))
+}
+
+/// Removes the keyframe starting at `frame` (⇧F6): its span joins the
+/// previous keyframe and its contents are dropped.
+pub fn clear_keyframe(doc: &mut Document, layers: &[LayerId], frame: u32) -> Result<()> {
+    edit_timeline(doc, layers, "Clear Keyframe", |_, l| {
+        let Some((i, start)) = l.keyframe_at(frame) else { return Ok(None) };
+        if start != frame {
+            return Err(Error::Invalid("that frame is not a keyframe".into()));
+        }
+        if i == 0 {
+            return Err(Error::Invalid("the first keyframe can't be cleared".into()));
+        }
+        let mut kfs = l.keyframes.clone();
+        let removed = kfs.remove(i);
+        kfs[i - 1].duration += removed.duration;
+        Ok(Some(kfs))
+    })
+}
+
+/// Sets (or with `None`, removes) the tween of the keyframe spanning
+/// `frame`. A tween needs a following keyframe to tween toward.
+pub fn set_tween(doc: &mut Document, layers: &[LayerId], frame: u32, tween: Option<Tween>) -> Result<()> {
+    if let Some(t) = &tween {
+        t.easing.validate()?;
+    }
+    let label = match &tween {
+        None => "Remove Tween",
+        Some(Tween { kind: TweenKind::Motion, .. }) => "Motion Tween",
+        Some(Tween { kind: TweenKind::Shape, .. }) => "Shape Tween",
+    };
+    edit_timeline(doc, layers, label, |_, l| {
+        let Some((i, _)) = l.keyframe_at(frame) else { return Ok(None) };
+        if tween.is_some() && i + 1 >= l.keyframes.len() {
+            return Err(Error::Invalid("insert a keyframe later on this layer to tween toward (F6)".into()));
+        }
+        let mut kfs = l.keyframes.clone();
+        kfs[i].tween = tween.clone();
+        Ok(Some(kfs))
+    })
 }

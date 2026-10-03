@@ -12,7 +12,7 @@ fn find(p: &Project, name: &str) -> ElementId {
     let mut found = None;
     for s in &p.symbols {
         walk_layers(&s.layers, &mut |l| {
-            if let Some(e) = l.elements.iter().find(|e| e.name == name) {
+            if let Some(e) = l.all_elements().find(|e| e.name == name) {
                 found = Some(e.id);
             }
         });
@@ -43,7 +43,7 @@ const OPTS: ShapeOptions = ShapeOptions { sides: 5, star: None };
 
 fn render_with(p: &Project, show_guides: bool) -> Vec<DrawOp> {
     let mut r = RecordingRenderer::default();
-    render_frame(p, 0, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides }, &mut r);
+    render_frame(p, 0, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides, onion: None }, &mut r);
     r.ops
 }
 
@@ -162,13 +162,13 @@ fn cycles_are_rejected() {
     let layer = petal.layers[0].id;
     let id = ElementId(doc.project.alloc_id());
     let el = Element::new(id, ElementKind::Instance { symbol: flower });
-    let err = doc.execute("bad", vec![Edit::InsertElement { layer, index: 0, element: el }]);
+    let err = doc.execute("bad", vec![Edit::InsertElement { layer, keyframe: 0, index: 0, element: el }]);
     assert!(matches!(err, Err(Error::Invalid(_))));
     assert!(!doc.is_dirty());
 
     let mut v: Value = serde_json::from_str(&save_to_string(&demo_project())).unwrap();
     let petal_json = v["project"]["symbols"].as_array_mut().unwrap().iter_mut().find(|s| s["name"] == "Petal").unwrap();
-    petal_json["layers"][0]["elements"]
+    petal_json["layers"][0]["keyframes"][0]["elements"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id": 9999, "type": "instance", "symbol": flower.0}));
@@ -283,19 +283,19 @@ fn create_shapes_on_active_layer_respecting_locks() {
     let mut doc = Document::new(demo_project());
     let layer = layer_named(&doc.project, "Flowers");
     let style = style(Some(Color::rgb(1, 2, 3)), Some((Color::BLACK, 4.0)));
-    let id = ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(10.0, 10.0), Point::new(110.0, 60.0), Modifiers::default(), &OPTS, &style)
+    let id = ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(10.0, 10.0), Point::new(110.0, 60.0), Modifiers::default(), &OPTS, &style, 0)
         .unwrap()
         .unwrap();
     let e = doc.project.element(id).unwrap();
     assert_eq!((e.transform.x, e.transform.y), (60.0, 35.0));
-    let b = element_bounds(&doc.project, e).unwrap();
+    let b = element_bounds(&doc.project, e, 0).unwrap();
     assert_eq!((b.width(), b.height()), (104.0, 54.0), "stroke half-width included");
-    assert!(ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(0.0, 0.0), Modifiers::default(), &OPTS, &style)
+    assert!(ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(0.0, 0.0), Modifiers::default(), &OPTS, &style, 0)
         .unwrap()
         .is_none());
 
     ops::set_layer_props(&mut doc, layer, &LayerPatch { locked: Some(true), ..Default::default() }).unwrap();
-    let err = ops::create_shape(&mut doc, layer, ShapeTool::Line, Point::new(0.0, 0.0), Point::new(50.0, 0.0), Modifiers::default(), &OPTS, &style);
+    let err = ops::create_shape(&mut doc, layer, ShapeTool::Line, Point::new(0.0, 0.0), Point::new(50.0, 0.0), Modifiers::default(), &OPTS, &style, 0);
     assert!(matches!(err, Err(Error::Invalid(m)) if m.contains("locked")));
 }
 
@@ -305,24 +305,24 @@ fn align_and_distribute() {
     let layer = layer_named(&doc.project, "Flowers");
     let style = style(Some(Color::BLACK), None);
     let mk = |doc: &mut Document, x0: f64, y0: f64, w: f64| {
-        ops::create_shape(doc, layer, ShapeTool::Rect, Point::new(x0, y0), Point::new(x0 + w, y0 + 20.0), Modifiers::default(), &OPTS, &style)
+        ops::create_shape(doc, layer, ShapeTool::Rect, Point::new(x0, y0), Point::new(x0 + w, y0 + 20.0), Modifiers::default(), &OPTS, &style, 0)
             .unwrap()
             .unwrap()
     };
     let a = mk(&mut doc, 0.0, 0.0, 10.0);
     let b = mk(&mut doc, 50.0, 30.0, 30.0);
     let c = mk(&mut doc, 200.0, 70.0, 20.0);
-    let bounds = |doc: &Document, id| element_bounds(&doc.project, doc.project.element(id).unwrap()).unwrap();
+    let bounds = |doc: &Document, id| element_bounds(&doc.project, doc.project.element(id).unwrap(), 0).unwrap();
 
-    ops::align(&mut doc, &[a, b, c], Align::Top, false).unwrap();
+    ops::align(&mut doc, &[a, b, c], Align::Top, false, 0).unwrap();
     assert!([a, b, c].iter().all(|id| bounds(&doc, *id).min.y == 0.0));
 
-    ops::distribute(&mut doc, &[c, a, b], Distribute::SpaceX, false).unwrap();
+    ops::distribute(&mut doc, &[c, a, b], Distribute::SpaceX, false, 0).unwrap();
     let (ba, bb, bc) = (bounds(&doc, a), bounds(&doc, b), bounds(&doc, c));
     assert!((bb.min.x - ba.max.x - (bc.min.x - bb.max.x)).abs() < 1e-9, "equal gaps");
     assert_eq!((ba.min.x, bc.max.x), (0.0, 220.0), "outer items stay put");
 
-    ops::align(&mut doc, &[b], Align::CenterX, false).unwrap();
+    ops::align(&mut doc, &[b], Align::CenterX, false, 0).unwrap();
     assert_eq!(bounds(&doc, b).center().x, 480.0, "single element aligns to stage");
     assert_eq!(doc.undo_label(), Some("Align"));
 }
@@ -332,7 +332,7 @@ fn arrange_z_order() {
     let mut doc = Document::new(demo_project());
     let (a, b, c) = (find(&doc.project, "flower A"), find(&doc.project, "flower B"), find(&doc.project, "flower C"));
     let layer = layer_named(&doc.project, "Flowers");
-    let order = |doc: &Document| doc.project.layer(layer).unwrap().elements.iter().map(|e| e.id).collect::<Vec<_>>();
+    let order = |doc: &Document| doc.project.layer(layer).unwrap().keyframes[0].elements.iter().map(|e| e.id).collect::<Vec<_>>();
     ops::arrange(&mut doc, &[a], Arrange::Front).unwrap();
     assert_eq!(order(&doc), vec![b, c, a]);
     ops::arrange(&mut doc, &[a], Arrange::Backward).unwrap();
@@ -387,10 +387,10 @@ fn cannot_delete_the_last_layer() {
 fn image_import_embeds_asset_and_round_trips() {
     let mut doc = Document::new(demo_project());
     let layer = layer_named(&doc.project, "Flowers");
-    let id = ops::import_image(&mut doc, layer, "photo.png", &png(64, 32), Point::new(100.0, 100.0)).unwrap();
+    let id = ops::import_image(&mut doc, layer, "photo.png", &png(64, 32), Point::new(100.0, 100.0), 0).unwrap();
     let ops_ = record(&doc.project);
     assert!(ops_.iter().any(|o| matches!(o, DrawOp::Image { width, height, .. } if *width == 64.0 && *height == 32.0)));
-    let b = element_bounds(&doc.project, doc.project.element(id).unwrap()).unwrap();
+    let b = element_bounds(&doc.project, doc.project.element(id).unwrap(), 0).unwrap();
     assert_eq!((b.min.x, b.min.y, b.width()), (68.0, 84.0, 64.0));
 
     let json = save_to_string(&doc.project);
@@ -400,7 +400,7 @@ fn image_import_embeds_asset_and_round_trips() {
 
     doc.undo().unwrap();
     assert!(doc.project.assets.is_empty() && doc.project.element(id).is_none());
-    assert!(ops::import_image(&mut doc, layer, "x.txt", b"not an image at all", Point::default()).is_err());
+    assert!(ops::import_image(&mut doc, layer, "x.txt", b"not an image at all", Point::default(), 0).is_err());
 }
 
 // ---------- the Phase 2 gate, end to end ----------
@@ -414,9 +414,9 @@ fn gate_static_multilayer_scene_round_trips_and_undoes() {
     let style = style(Some(Color::rgb(200, 40, 40)), Some((Color::BLACK, 2.0)));
 
     let top = ops::add_layer(&mut doc, root, None, LayerKind::Normal).unwrap();
-    let r = ops::create_shape(&mut doc, top, ShapeTool::Rect, Point::new(100.0, 100.0), Point::new(200.0, 160.0), Modifiers::default(), &OPTS, &style).unwrap().unwrap();
-    let e = ops::create_shape(&mut doc, top, ShapeTool::Ellipse, Point::new(300.0, 100.0), Point::new(380.0, 200.0), Modifiers::default(), &OPTS, &style).unwrap().unwrap();
-    let l = ops::create_shape(&mut doc, top, ShapeTool::Line, Point::new(50.0, 300.0), Point::new(250.0, 330.0), Modifiers { shift: true, alt: false }, &OPTS, &style).unwrap().unwrap();
+    let r = ops::create_shape(&mut doc, top, ShapeTool::Rect, Point::new(100.0, 100.0), Point::new(200.0, 160.0), Modifiers::default(), &OPTS, &style, 0).unwrap().unwrap();
+    let e = ops::create_shape(&mut doc, top, ShapeTool::Ellipse, Point::new(300.0, 100.0), Point::new(380.0, 200.0), Modifiers::default(), &OPTS, &style, 0).unwrap().unwrap();
+    let l = ops::create_shape(&mut doc, top, ShapeTool::Line, Point::new(50.0, 300.0), Point::new(250.0, 330.0), Modifiers { shift: true, alt: false }, &OPTS, &style, 0).unwrap().unwrap();
 
     // Drag-scale the rect, rotate the ellipse, skew the line.
     let s = TransformSession::begin(&doc.project, scope, &[r], DragMode::Scale { handle: Handle::Se }, Point::new(200.0, 160.0)).unwrap();
@@ -496,7 +496,7 @@ fn bad_files_are_rejected() {
     let mut folder_with_elements = good.clone();
     let scene = &mut folder_with_elements["project"]["symbols"][0];
     let folder = scene["layers"].as_array_mut().unwrap().iter_mut().find(|l| l["kind"] == "folder").unwrap();
-    folder["elements"] = json!([{ "id": 9000, "type": "shape", "geometry": { "kind": "rect", "width": 1, "height": 1 } }]);
+    folder["keyframes"] = json!([{ "duration": 1, "elements": [{ "id": 9000, "type": "shape", "geometry": { "kind": "rect", "width": 1, "height": 1 } }] }]);
     folder_with_elements["project"]["nextId"] = json!(9001);
     assert!(matches!(load_from_str(&folder_with_elements.to_string()), Err(Error::Invalid(_))));
 
@@ -528,7 +528,7 @@ fn phase1_files_still_load() {
     assert_eq!((st.cap, st.join, st.miter_limit), (LineCap::Butt, LineJoin::Miter, 10.0));
     assert_eq!(shape.fill, Some(Paint::solid(Color::rgb(255, 0, 0))));
     // And it now saves as the current schema.
-    assert!(save_to_string(&p).contains("\"schemaVersion\": 2"));
+    assert!(save_to_string(&p).contains(&format!("\"schemaVersion\": {SCHEMA_VERSION}")));
 }
 
 #[test]
@@ -646,15 +646,15 @@ fn gate_vector_paths_with_gradients_round_trip_and_undo() {
     pen.pointer_down(Point::new(150.0, 200.0), m, 6.0);
     pen.pointer_up();
     assert!(pen.pointer_down(Point::new(101.0, 101.0), m, 6.0));
-    let pen_id = ops::create_path(&mut doc, layer, pen.finish().unwrap(), &grad, "Pen").unwrap();
+    let pen_id = ops::create_path(&mut doc, layer, pen.finish().unwrap(), &grad, "Pen", 0).unwrap();
 
     // 2. Pencil: an open freehand wave (no fill on open paths).
     let wave: Vec<Point> = (0..120).map(|i| Point::new(300.0 + i as f64 * 2.0, 400.0 + 30.0 * (i as f64 / 10.0).sin())).collect();
-    let pencil_id = ops::create_freehand(&mut doc, layer, &wave, true, 1.5, &grad).unwrap().unwrap();
+    let pencil_id = ops::create_freehand(&mut doc, layer, &wave, true, 1.5, &grad, 0).unwrap().unwrap();
 
     // 3. Star with the polygon tool.
     let star_id = ops::create_shape(&mut doc, layer, ShapeTool::Polygon, Point::new(700.0, 400.0), Point::new(700.0, 340.0), m,
-        &ShapeOptions { sides: 5, star: Some(0.45) }, &grad).unwrap().unwrap();
+        &ShapeOptions { sides: 5, star: Some(0.45) }, &grad, 0).unwrap().unwrap();
 
     // 4. Subselection: drag an anchor; drag a handle with Alt (break tangent).
     let s = EditSession::begin(&doc.project, scope, pen_id, EditTarget::Anchors { nodes: vec![NodeRef { subpath: 0, node: 0 }] }, Point::new(100.0, 100.0)).unwrap();
@@ -713,4 +713,274 @@ fn stroke_patches_merge_per_shape() {
     assert_eq!(stroke(cloud).dash, vec![6.0, 4.0], "own dash kept");
     let ground = find(&doc.project, "ground");
     assert!(ops::patch_element(&mut doc, ground, &json!({"stroke": {"width": 5}})).is_err(), "no stroke to merge into: needs a full stroke");
+}
+
+// ---------- Phase 4: timeline & tweening ----------
+
+fn scene_transform(p: &Project, frame: u32, name: &str) -> Transform {
+    let scope = Scope::root(p).at(frame);
+    zoetrope_core::query::scene_elements(p, scope.symbol, frame)
+        .into_iter()
+        .find(|se| se.element.name == name)
+        .unwrap_or_else(|| panic!("{name} not shown at frame {frame}"))
+        .element
+        .transform
+}
+
+#[test]
+fn demo_tween_interpolates_with_easing() {
+    let p = demo_project();
+    assert_eq!(p.symbol(p.root).unwrap().length(), 48);
+    let sun0 = scene_transform(&p, 0, "sun");
+    let sun36 = scene_transform(&p, 36, "sun");
+    assert_eq!((sun0.y, sun36.y), (90.0, 60.0));
+    // easeInOutSine at t = 0.5 is exactly halfway; at t = 0.25 it lags linear.
+    assert!((scene_transform(&p, 18, "sun").y - 75.0).abs() < 1e-9);
+    let q = scene_transform(&p, 9, "sun").y;
+    let linear = 90.0 - 30.0 * 0.25;
+    assert!(q > linear, "eased progress lags linear early on: {q} vs {linear}");
+    // After the tween the end keyframe holds.
+    assert_eq!(scene_transform(&p, 47, "sun").y, 60.0);
+    // Past the end, nothing is drawn on that layer.
+    assert!(zoetrope_core::query::scene_elements(&p, p.root, 48).is_empty());
+}
+
+#[test]
+fn scrubbing_renders_are_deterministic_and_distinct() {
+    let p = demo_project();
+    let at = |f: u32| {
+        let mut r = RecordingRenderer::default();
+        render_frame(&p, f, RenderOptions::player(Matrix::IDENTITY), &mut r);
+        r.ops
+    };
+    for f in [0, 7, 18, 35, 36, 47] {
+        assert_eq!(at(f), at(f), "frame {f} deterministic");
+    }
+    assert_ne!(at(10), at(11));
+    assert_eq!(at(36), at(47), "held after the tween");
+}
+
+#[test]
+fn custom_bezier_easing_drives_the_tween() {
+    let mut doc = Document::new(demo_project());
+    let sky = layer_named(&doc.project, "Sky");
+    let ease = Easing::Bezier { x1: 0.0, y1: 1.0, x2: 0.0, y2: 1.0 }; // very fast start
+    ops::set_tween(&mut doc, &[sky], 5, Some(Tween { kind: TweenKind::Motion, easing: ease, rotate: 0 })).unwrap();
+    let y = scene_transform(&doc.project, 4, "sun").y;
+    let t = ease.apply(4.0 / 36.0);
+    assert!((y - (90.0 - 30.0 * t)).abs() < 1e-9);
+    assert!(t > 0.5, "bezier front-loads progress");
+    // Rotation turns add full spins.
+    ops::set_tween(&mut doc, &[sky], 0, Some(Tween { kind: TweenKind::Motion, easing: Easing::Linear, rotate: 1 })).unwrap();
+    assert!((scene_transform(&doc.project, 18, "sun").rotation - 180.0).abs() < 1e-9);
+    assert!(matches!(
+        ops::set_tween(&mut doc, &[sky], 40, Some(Tween { kind: TweenKind::Motion, easing: Easing::Linear, rotate: 0 })),
+        Err(Error::Invalid(m)) if m.contains("keyframe later")
+    ));
+}
+
+#[test]
+fn frame_ops_reshape_spans_and_undo() {
+    let mut doc = Document::new(demo_project());
+    let original = doc.project.clone();
+    let flowers = layer_named(&doc.project, "Flowers");
+    let spans = |doc: &Document| doc.project.layer(flowers).unwrap().keyframes.iter().map(|k| k.duration).collect::<Vec<_>>();
+    ops::insert_frames(&mut doc, &[flowers], 10, 2).unwrap();
+    assert_eq!(spans(&doc), vec![50]);
+    ops::remove_frames(&mut doc, &[flowers], 10, 1).unwrap();
+    assert_eq!(spans(&doc), vec![49]);
+    ops::insert_keyframe(&mut doc, &[flowers], 20, false).unwrap();
+    assert_eq!(spans(&doc), vec![20, 29]);
+    let kf = &doc.project.layer(flowers).unwrap().keyframes;
+    assert_eq!(kf[1].elements.len(), 3);
+    assert_eq!(kf[1].elements[0].track(), kf[0].elements[0].track(), "copies keep their track");
+    assert_ne!(kf[1].elements[0].id, kf[0].elements[0].id, "copies get fresh ids");
+    ops::insert_keyframe(&mut doc, &[flowers], 30, true).unwrap();
+    assert_eq!(spans(&doc), vec![20, 10, 19]);
+    assert!(doc.project.layer(flowers).unwrap().keyframes[2].elements.is_empty());
+    // Beyond the end: F6 stretches the last span and adds a keyframe.
+    ops::insert_keyframe(&mut doc, &[flowers], 60, false).unwrap();
+    assert_eq!(spans(&doc), vec![20, 10, 30, 1]);
+    assert!(matches!(ops::clear_keyframe(&mut doc, &[flowers], 25), Err(Error::Invalid(_))));
+    assert!(matches!(ops::clear_keyframe(&mut doc, &[flowers], 0), Err(Error::Invalid(_))));
+    ops::clear_keyframe(&mut doc, &[flowers], 30).unwrap();
+    assert_eq!(spans(&doc), vec![20, 40, 1]);
+    while doc.undo().unwrap() {}
+    assert_eq!(Project { next_id: original.next_id, ..doc.project.clone() }, original);
+}
+
+#[test]
+fn keyframe_inside_a_tween_captures_the_interpolated_state() {
+    let mut doc = Document::new(demo_project());
+    let sky = layer_named(&doc.project, "Sky");
+    let mid = scene_transform(&doc.project, 18, "sun");
+    ops::insert_keyframe(&mut doc, &[sky], 18, false).unwrap();
+    let l = doc.project.layer(sky).unwrap();
+    assert_eq!(l.keyframes.iter().map(|k| k.duration).collect::<Vec<_>>(), vec![18, 18, 12]);
+    assert!(l.keyframes[1].tween.is_some(), "both halves stay tweened");
+    let sun = l.keyframes[1].elements.iter().find(|e| e.name == "sun").unwrap();
+    assert_eq!(sun.transform, mid);
+    // Now the first half tweens toward the captured state: the path is the same at 9…
+    // (the easing restarts per half, so only endpoints are guaranteed to match)
+    assert_eq!(scene_transform(&doc.project, 18, "sun"), mid);
+}
+
+#[test]
+fn tweened_frames_block_direct_manipulation() {
+    let mut doc = Document::new(demo_project());
+    let sun = find(&doc.project, "sun");
+    let scope = Scope::root(&doc.project);
+    // Selectable and hit-testable at an interpolated position…
+    let pos = scene_transform(&doc.project, 18, "sun");
+    assert_eq!(zoetrope_core::query::hit_test(&doc.project, &scope.at(18), Point::new(pos.x, pos.y), 1.0), Some(sun));
+    // …but not draggable there.
+    let err = TransformSession::begin(&doc.project, scope.at(18), &[sun], DragMode::Move, Point::new(pos.x, pos.y));
+    assert!(matches!(err, Err(Error::Invalid(m)) if m.contains("tweened")));
+    // On the keyframe itself it works.
+    assert!(TransformSession::begin(&doc.project, scope.at(0), &[sun], DragMode::Move, Point::new(820.0, 90.0)).is_ok());
+    // Elements of another keyframe aren't on the current frame.
+    let end_sun = doc.project.layer(layer_named(&doc.project, "Sky")).unwrap().keyframes[1].elements[0].id;
+    assert!(TransformSession::begin(&doc.project, scope.at(0), &[end_sun], DragMode::Move, Point::default()).is_err());
+    // Drawing on a frame past a layer's end extends it with a keyframe.
+    let flowers = layer_named(&doc.project, "Flowers");
+    let st = style(Some(Color::BLACK), None);
+    let id = ops::create_shape(&mut doc, flowers, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(10.0, 10.0), Modifiers::default(), &OPTS, &st, 60)
+        .unwrap()
+        .unwrap();
+    let l = doc.project.layer(flowers).unwrap();
+    assert_eq!(l.keyframes.iter().map(|k| k.duration).collect::<Vec<_>>(), vec![60, 1]);
+    assert_eq!(doc.project.locate(id).unwrap().keyframe, 1);
+    doc.undo().unwrap();
+    assert_eq!(doc.project.layer(flowers).unwrap().length(), 48, "one undo removes shape and extension");
+}
+
+#[test]
+fn shape_tween_morphs_geometry_and_paint() {
+    let mut doc = Document::new(demo_project());
+    let root = doc.project.root;
+    let layer = ops::add_layer(&mut doc, root, None, LayerKind::Normal).unwrap();
+    let red = style(Some(Color::rgb(255, 0, 0)), None);
+    let a = ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(100.0, 100.0), Modifiers::default(), &OPTS, &red, 0)
+        .unwrap()
+        .unwrap();
+    ops::insert_keyframe(&mut doc, &[layer], 10, false).unwrap();
+    // Turn the copy at frame 10 into a blue star.
+    let copy = doc.project.layer(layer).unwrap().keyframes[1].elements[0].id;
+    let star = VectorPath::polystar(5, 50.0, Some(0.5), 0.0);
+    ops::patch_element(&mut doc, copy, &json!({"geometry": Geometry::Path(star), "fill": {"type": "solid", "color": "#0000ff"}})).unwrap();
+    ops::set_tween(&mut doc, &[layer], 0, Some(Tween { kind: TweenKind::Shape, easing: Easing::Linear, rotate: 0 })).unwrap();
+    let mid = zoetrope_core::query::scene_elements(&doc.project, doc.project.root, 5).into_iter().find(|se| se.element.id == a).unwrap().element.into_owned();
+    let ElementKind::Shape(s) = &mid.kind else { panic!() };
+    let Geometry::Path(v) = &s.geometry else { panic!("morphed to a path") };
+    assert_eq!(v.subpaths[0].nodes.len(), 10, "rect grown to the star's node count");
+    assert_eq!(s.fill, Some(Paint::solid(Color::rgb(128, 0, 128))));
+    // A motion tween leaves the geometry alone.
+    ops::set_tween(&mut doc, &[layer], 0, Some(Tween { kind: TweenKind::Motion, easing: Easing::Linear, rotate: 0 })).unwrap();
+    let mid = zoetrope_core::query::scene_elements(&doc.project, doc.project.root, 5).into_iter().find(|se| se.element.id == a).unwrap().element.into_owned();
+    let ElementKind::Shape(s) = &mid.kind else { panic!() };
+    assert!(matches!(s.geometry, Geometry::Rect { .. }));
+}
+
+#[test]
+fn onion_skin_draws_neighbors_faded() {
+    let p = demo_project();
+    let mut r = RecordingRenderer::default();
+    let opts = RenderOptions { onion: Some(zoetrope_core::render::Onion { before: 2, after: 1, alpha: 0.4 }), ..RenderOptions::player(Matrix::IDENTITY) };
+    render_frame(&p, 10, opts, &mut r);
+    let groups: Vec<f64> = r.ops.iter().filter_map(|o| if let DrawOp::BeginGroup { alpha, .. } = o { Some(*alpha) } else { None }).collect();
+    assert_eq!(groups, vec![0.2, 0.4, 0.4], "two before (farther = fainter), one after");
+    // At frame 0 there is nothing before.
+    let mut r0 = RecordingRenderer::default();
+    render_frame(&p, 0, opts, &mut r0);
+    assert_eq!(r0.ops.iter().filter(|o| matches!(o, DrawOp::BeginGroup { .. })).count(), 1);
+    // Ghosts are drawn per layer (just under the Sky layer's own content, i.e.
+    // above the background), and only for layers whose picture changes.
+    let first_group = r.ops.iter().position(|o| matches!(o, DrawOp::BeginGroup { .. })).unwrap();
+    let fills_before = r.ops[..first_group].iter().filter(|o| matches!(o, DrawOp::Fill { .. })).count();
+    assert_eq!(fills_before, 2, "sky + ground drawn first");
+    // Locking the animated layer turns its onion skin off (as in Flash).
+    let mut locked = p.clone();
+    locked.layer_mut(layer_named(&p, "Sky")).unwrap().locked = true;
+    let mut rl = RecordingRenderer::default();
+    render_frame(&locked, 10, opts, &mut rl);
+    assert!(!rl.ops.iter().any(|o| matches!(o, DrawOp::BeginGroup { .. })));
+}
+
+#[test]
+fn v2_files_migrate_to_keyframes() {
+    let v2 = json!({
+        "format": "zoetrope-project", "schemaVersion": 2,
+        "project": { "nextId": 6, "root": 1,
+            "stage": { "width": 100.0, "height": 50.0, "background": "#ffffff", "fps": 12.0 },
+            "symbols": [{ "id": 1, "name": "S", "layers": [
+                { "id": 2, "name": "F", "kind": "folder", "children": [
+                    { "id": 3, "name": "L", "elements": [
+                        { "id": 4, "type": "shape", "geometry": { "kind": "rect", "width": 10.0, "height": 10.0 } }
+                    ]}
+                ]},
+                { "id": 5, "name": "Empty" }
+            ]}]
+        }
+    });
+    let p = load_from_str(&v2.to_string()).unwrap();
+    let inner = p.layer(LayerId(3)).unwrap();
+    assert_eq!(inner.keyframes.len(), 1);
+    assert_eq!(inner.keyframes[0].duration, 1);
+    assert_eq!(inner.keyframes[0].elements[0].id, ElementId(4));
+    assert_eq!(p.layer(LayerId(5)).unwrap().keyframes, vec![Keyframe::blank(1)]);
+    assert!(p.layer(LayerId(2)).unwrap().keyframes.is_empty());
+    assert!(save_to_string(&p).contains("\"schemaVersion\": 3"));
+}
+
+#[test]
+fn gate_tweened_animation_round_trips_and_undoes() {
+    let mut doc = Document::new(demo_project());
+    let original = doc.project.clone();
+    let root = doc.project.root;
+    let layer = ops::add_layer(&mut doc, root, None, LayerKind::Normal).unwrap();
+    let st = style(Some(Color::rgb(200, 30, 90)), Some((Color::BLACK, 2.0)));
+    let ball = ops::create_shape(&mut doc, layer, ShapeTool::Ellipse, Point::new(40.0, 40.0), Point::new(100.0, 100.0), Modifiers::default(), &OPTS, &st, 0)
+        .unwrap()
+        .unwrap();
+    ops::insert_keyframe(&mut doc, &[layer], 24, false).unwrap();
+    // Edit the end keyframe (scope at frame 24): move and spin the ball.
+    let end = doc.project.layer(layer).unwrap().keyframes[1].elements[0].id;
+    let scope = Scope::root(&doc.project).at(24);
+    let s = TransformSession::begin(&doc.project, scope, &[end], DragMode::Move, Point::new(70.0, 70.0)).unwrap();
+    s.update(&mut doc.project, Point::new(870.0, 470.0), Modifiers::default(), &SnapConfig::default());
+    s.commit(&mut doc).unwrap();
+    ops::patch_element(&mut doc, end, &json!({"opacity": 0.3, "transform": {"scaleX": 2, "scaleY": 2}})).unwrap();
+    let easing = Easing::Bezier { x1: 0.68, y1: -0.55, x2: 0.27, y2: 1.55 }; // "back in-out" style
+    ops::set_tween(&mut doc, &[layer], 0, Some(Tween { kind: TweenKind::Motion, easing, rotate: 2 })).unwrap();
+
+    let at = |p: &Project, f: u32| -> Element {
+        zoetrope_core::query::scene_elements(p, p.root, f).into_iter().find(|se| se.element.id == ball).unwrap().element.into_owned()
+    };
+    let e12 = at(&doc.project, 12);
+    let k = easing.apply(0.5);
+    assert!((e12.transform.x - (70.0 + 800.0 * k)).abs() < 1e-9);
+    assert!((e12.transform.rotation - 720.0 * k).abs() < 1e-9);
+    assert!((e12.opacity - (1.0 + (0.3 - 1.0) * k)).abs() < 1e-9);
+    assert!(easing.apply(0.1) < 0.0, "custom curve anticipates (goes negative)");
+
+    // Every frame renders deterministically, identically after a round-trip.
+    let json = save_to_string(&doc.project);
+    let loaded = load_from_str(&json).unwrap();
+    assert_eq!(loaded, doc.project);
+    for f in 0..=24 {
+        let (mut r1, mut r2) = (RecordingRenderer::default(), RecordingRenderer::default());
+        render_frame(&doc.project, f, RenderOptions::player(Matrix::IDENTITY), &mut r1);
+        render_frame(&loaded, f, RenderOptions::player(Matrix::IDENTITY), &mut r2);
+        assert_eq!(r1.ops, r2.ops, "frame {f}");
+    }
+
+    let end_state = doc.project.clone();
+    let mut steps = 0;
+    while doc.undo().unwrap() {
+        steps += 1;
+    }
+    assert_eq!(steps, 6, "layer, ellipse, keyframe, move, properties, tween");
+    assert_eq!(Project { next_id: original.next_id, ..doc.project.clone() }, original);
+    while doc.redo().unwrap() {}
+    assert_eq!(doc.project, end_state);
 }

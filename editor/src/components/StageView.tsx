@@ -8,6 +8,7 @@ import type {
   Handle,
   Modifiers,
   NodeRef,
+  Onion,
   PathHit,
   PathInfo,
   PenPreview,
@@ -55,6 +56,10 @@ interface Props {
   engine: Engine;
   /** Bumped by the parent after every committed model change. */
   version: number;
+  /** Current frame of the timeline (already set on the engine). */
+  frame: number;
+  /** Onion skin settings, or null when off. */
+  onion: Onion | null;
   stage: StageInfo;
   selection: number[];
   onSelect: (ids: number[]) => void;
@@ -192,7 +197,7 @@ export function StageView(props: Props) {
     const dpr = fitCanvas(scene, w, h);
     const ctx = scene.getContext("2d")!;
     const t0 = performance.now();
-    p.engine.render(ctx, 0, v.zoom * dpr, v.panX * dpr, v.panY * dpr, false, p.settings.showGuides);
+    p.engine.render(ctx, p.frame, v.zoom * dpr, v.panX * dpr, v.panY * dpr, false, p.settings.showGuides, JSON.stringify(p.onion));
     p.onRenderTime(performance.now() - t0);
 
     fitCanvas(overlay, w, h);
@@ -240,7 +245,7 @@ export function StageView(props: Props) {
 
   useEffect(() => {
     requestDraw();
-  }, [requestDraw, version, selection, props.anchors, size, props.view, stage, settings, props.tool]);
+  }, [requestDraw, version, selection, props.anchors, size, props.view, stage, settings, props.tool, props.frame, props.onion]);
 
   useEffect(
     () => () => {

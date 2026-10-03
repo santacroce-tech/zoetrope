@@ -25,9 +25,10 @@ use zoetrope_core::interact::{
 };
 use zoetrope_core::ops::{self, Align, Arrange, Distribute, LayerPatch, ShapeStyle};
 use zoetrope_core::query::{self, Scope};
-use zoetrope_core::render::{render_frame, RenderOptions};
+use zoetrope_core::render::{render_frame, Onion, RenderOptions};
 use zoetrope_core::{
-    demo, format, outline, AssetId, Document, ElementId, Error, LayerId, LayerKind, Matrix, NodeRef, PaintStyle, Point, Project, Stage,
+    demo, format, outline, AssetId, Document, Easing, ElementId, Error, LayerId, LayerKind, Matrix, NodeRef, PaintStyle, Point, Project, Stage,
+    Tween,
 };
 
 #[derive(Default)]
@@ -42,6 +43,8 @@ pub struct Engine {
     session: Option<TransformSession>,
     edit: Option<EditSession>,
     pen: Option<PenSession>,
+    /// Current frame of the edited timeline (the playhead).
+    frame: u32,
     images: Rc<RefCell<ImageCache>>,
     /// Bumped when the document is replaced, so in-flight decodes for the
     /// old document are discarded.
@@ -61,6 +64,10 @@ fn ids(json: &str) -> Result<Vec<ElementId>, JsError> {
     Ok(parse::<Vec<u32>>("id list", json)?.into_iter().map(ElementId).collect())
 }
 
+fn layer_ids(json: &str) -> Result<Vec<LayerId>, JsError> {
+    Ok(parse::<Vec<u32>>("layer id list", json)?.into_iter().map(LayerId).collect())
+}
+
 fn to_json<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_string(v).expect("serializable")
 }
@@ -75,6 +82,7 @@ impl Engine {
             session: None,
             edit: None,
             pen: None,
+            frame: 0,
             images: Rc::default(),
             generation: Rc::default(),
             pool: RefCell::default(),
@@ -86,12 +94,13 @@ impl Engine {
         self.session = None;
         self.edit = None;
         self.pen = None;
+        self.frame = 0;
         *self.images.borrow_mut() = ImageCache::default();
         self.generation.set(self.generation.get() + 1);
     }
 
     fn scope(&self) -> Scope {
-        Scope::root(&self.doc.project)
+        Scope::root(&self.doc.project).at(self.frame)
     }
 
     /// Draws `frame` into `ctx`. `scale`/`offset_*` map stage units to canvas
@@ -106,12 +115,77 @@ impl Engine {
         offset_y: f64,
         clip: bool,
         show_guides: bool,
-    ) {
+        onion_json: &str,
+    ) -> Result<(), JsError> {
+        let onion: Option<Onion> = parse("onion", onion_json)?;
         let view = Matrix::translate(offset_x, offset_y) * Matrix::scale(scale, scale);
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
-        render_frame(&self.doc.project, frame, RenderOptions { view, clip_to_stage: clip, show_guides }, &mut r);
+        render_frame(&self.doc.project, frame, RenderOptions { view, clip_to_stage: clip, show_guides, onion }, &mut r);
+        Ok(())
+    }
+
+    // ----- timeline -----
+
+    /// Moves the editing playhead. Cancels any drag in progress.
+    #[wasm_bindgen(js_name = setFrame)]
+    pub fn set_frame(&mut self, frame: u32) {
+        if frame != self.frame {
+            self.cancel_transform();
+            self.cancel_edit();
+            self.frame = frame;
+        }
+    }
+
+    pub fn frame(&self) -> u32 {
+        self.frame
+    }
+
+    /// Frames in the edited timeline.
+    #[wasm_bindgen(js_name = timelineLength)]
+    pub fn timeline_length(&self) -> u32 {
+        self.doc.project.symbol(self.scope().symbol).map_or(1, |s| s.length())
+    }
+
+    /// F5: lengthen the span at `frame` on each layer (JSON id list).
+    #[wasm_bindgen(js_name = insertFrames)]
+    pub fn insert_frames(&mut self, layers_json: &str, frame: u32, count: u32) -> Result<(), JsError> {
+        ops::insert_frames(&mut self.doc, &layer_ids(layers_json)?, frame, count).map_err(js_err)
+    }
+
+    /// ⇧F5: shorten the span at `frame`.
+    #[wasm_bindgen(js_name = removeFrames)]
+    pub fn remove_frames(&mut self, layers_json: &str, frame: u32, count: u32) -> Result<(), JsError> {
+        ops::remove_frames(&mut self.doc, &layer_ids(layers_json)?, frame, count).map_err(js_err)
+    }
+
+    /// F6 (copy what's shown) / F7 (`blank`).
+    #[wasm_bindgen(js_name = insertKeyframe)]
+    pub fn insert_keyframe(&mut self, layers_json: &str, frame: u32, blank: bool) -> Result<(), JsError> {
+        ops::insert_keyframe(&mut self.doc, &layer_ids(layers_json)?, frame, blank).map_err(js_err)
+    }
+
+    /// ⇧F6: remove the keyframe starting at `frame`.
+    #[wasm_bindgen(js_name = clearKeyframe)]
+    pub fn clear_keyframe(&mut self, layers_json: &str, frame: u32) -> Result<(), JsError> {
+        ops::clear_keyframe(&mut self.doc, &layer_ids(layers_json)?, frame).map_err(js_err)
+    }
+
+    /// Sets the tween of the span at `frame`: `{ kind, easing, rotate }` or `null`.
+    #[wasm_bindgen(js_name = setTween)]
+    pub fn set_tween(&mut self, layers_json: &str, frame: u32, tween_json: &str) -> Result<(), JsError> {
+        let tween: Option<Tween> = parse("tween", tween_json)?;
+        ops::set_tween(&mut self.doc, &layer_ids(layers_json)?, frame, tween).map_err(js_err)
+    }
+
+    /// `samples + 1` eased values for t = 0, 1/samples, …, 1 (for the curve editor).
+    #[wasm_bindgen(js_name = easingCurveJson)]
+    pub fn easing_curve_json(&self, easing_json: &str, samples: u32) -> Result<String, JsError> {
+        let easing: Easing = parse("easing", easing_json)?;
+        let n = samples.clamp(1, 1000);
+        let ys: Vec<f64> = (0..=n).map(|i| easing.apply(i as f64 / n as f64)).collect();
+        Ok(to_json(&ys))
     }
 
     /// Decodes embedded images that are not decoded yet. Resolves to the
@@ -217,7 +291,7 @@ impl Engine {
     /// Element + derived info for the properties panel, or `null`.
     #[wasm_bindgen(js_name = elementJson)]
     pub fn element_json(&self, id: u32) -> String {
-        to_json(&outline::element_info(&self.doc.project, ElementId(id)))
+        to_json(&outline::element_info(&self.doc.project, ElementId(id), self.frame))
     }
 
     /// Handle geometry for a selection (JSON id list), or `null`.
@@ -362,7 +436,7 @@ impl Engine {
     pub fn pen_finish(&mut self, layer: u32, style_json: &str) -> Result<Option<u32>, JsError> {
         let style: ShapeStyle = parse("style", style_json)?;
         let Some(path) = self.pen.take().and_then(PenSession::finish) else { return Ok(None) };
-        ops::create_path(&mut self.doc, LayerId(layer), path, &style, "Pen").map(|e| Some(e.0)).map_err(js_err)
+        ops::create_path(&mut self.doc, LayerId(layer), path, &style, "Pen", self.frame).map(|e| Some(e.0)).map_err(js_err)
     }
 
     #[wasm_bindgen(js_name = penCancel)]
@@ -377,7 +451,7 @@ impl Engine {
     pub fn create_freehand(&mut self, layer: u32, points_json: &str, smooth: bool, tolerance: f64, style_json: &str) -> Result<Option<u32>, JsError> {
         let points: Vec<Point> = parse("points", points_json)?;
         let style: ShapeStyle = parse("style", style_json)?;
-        ops::create_freehand(&mut self.doc, LayerId(layer), &points, smooth, tolerance, &style).map(|e| e.map(|e| e.0)).map_err(js_err)
+        ops::create_freehand(&mut self.doc, LayerId(layer), &points, smooth, tolerance, &style, self.frame).map(|e| e.map(|e| e.0)).map_err(js_err)
     }
 
     // ----- subselection & gradient editing -----
@@ -508,7 +582,7 @@ impl Engine {
         let mods: Modifiers = parse("modifiers", mods_json)?;
         let opts: ShapeOptions = parse("shape options", opts_json)?;
         let style: ShapeStyle = parse("style", style_json)?;
-        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, Point::new(x0, y0), Point::new(x1, y1), mods, &opts, &style)
+        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, Point::new(x0, y0), Point::new(x1, y1), mods, &opts, &style, self.frame)
             .map_err(js_err)?;
         Ok(id.map(|e| e.0))
     }
@@ -517,7 +591,7 @@ impl Engine {
     /// on `layer`. Call `decodeImages()` afterwards.
     #[wasm_bindgen(js_name = importImage)]
     pub fn import_image(&mut self, layer: u32, name: &str, bytes: &[u8], x: f64, y: f64) -> Result<u32, JsError> {
-        ops::import_image(&mut self.doc, LayerId(layer), name, bytes, Point::new(x, y)).map(|e| e.0).map_err(js_err)
+        ops::import_image(&mut self.doc, LayerId(layer), name, bytes, Point::new(x, y), self.frame).map(|e| e.0).map_err(js_err)
     }
 
     /// Merges a JSON patch into each element (see `ops::patch_element`).
@@ -530,7 +604,7 @@ impl Engine {
 
     #[wasm_bindgen(js_name = setElementSize)]
     pub fn set_element_size(&mut self, id: u32, width: f64, height: f64) -> Result<(), JsError> {
-        ops::set_element_size(&mut self.doc, ElementId(id), width, height).map_err(js_err)
+        ops::set_element_size(&mut self.doc, ElementId(id), width, height, self.frame).map_err(js_err)
     }
 
     #[wasm_bindgen(js_name = translateElements)]
@@ -553,13 +627,13 @@ impl Engine {
     /// `mode`: left | centerX | right | top | centerY | bottom.
     pub fn align(&mut self, ids_json: &str, mode: &str, to_stage: bool) -> Result<(), JsError> {
         let mode: Align = parse("align mode", &format!("{mode:?}"))?;
-        ops::align(&mut self.doc, &ids(ids_json)?, mode, to_stage).map_err(js_err)
+        ops::align(&mut self.doc, &ids(ids_json)?, mode, to_stage, self.frame).map_err(js_err)
     }
 
     /// `mode`: centersX | centersY | spaceX | spaceY.
     pub fn distribute(&mut self, ids_json: &str, mode: &str, to_stage: bool) -> Result<(), JsError> {
         let mode: Distribute = parse("distribute mode", &format!("{mode:?}"))?;
-        ops::distribute(&mut self.doc, &ids(ids_json)?, mode, to_stage).map_err(js_err)
+        ops::distribute(&mut self.doc, &ids(ids_json)?, mode, to_stage, self.frame).map_err(js_err)
     }
 
     /// `op`: front | forward | backward | back.
@@ -570,7 +644,7 @@ impl Engine {
 
     #[wasm_bindgen(js_name = moveToLayer)]
     pub fn move_to_layer(&mut self, ids_json: &str, layer: u32) -> Result<(), JsError> {
-        ops::move_to_layer(&mut self.doc, &ids(ids_json)?, LayerId(layer)).map_err(js_err)
+        ops::move_to_layer(&mut self.doc, &ids(ids_json)?, LayerId(layer), self.frame).map_err(js_err)
     }
 
     /// Replaces the stage settings: `{ width, height, background, fps }`.

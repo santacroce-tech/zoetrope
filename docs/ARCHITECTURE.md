@@ -37,6 +37,7 @@ with a minimal JS bootstrap instead of the React editor.
 | `query`    | Tight bounds, hit-testing (fill containment, stroke distance, recursion into instances; hidden and locked layers are skipped), marquee, selection handle geometry. |
 | `interact` | Direct-manipulation math: `TransformSession` (move/scale/rotate/skew/pivot drags with modifiers), `EditSession` (anchor/handle/gradient drags), `PenSession` (the pen tool's state machine), snapping (grid, objects, stage), shape-tool drags (incl. polygon/star). |
 | `vector`   | Editable `VectorPath` (subpaths of anchors with bezier handles): primitive→path conversion, split/insert, delete, convert corner⇄smooth, handle constraints, nearest-point, freehand fitting (RDP simplification + Catmull-Rom smoothing), polystar. |
+| `timeline` | Keyframes, tweens and easing (presets + cubic-bezier). `evaluate_layer(layer, frame)` produces the elements shown at a frame (interpolated when tweened); also covers path morphing for shape tweens. |
 | `paint`    | `Paint` (solid, linear, radial with focal point), `PaintStyle` (geometry-free tool form, fitted to shapes), `Stroke` (caps, joins, miter, dashes), `FillRule`. |
 | `geom`     | `Path` (move/line/quad/cubic/close), deterministic flattening, containment (non-zero / even-odd), outline distance, `Rect`. |
 | `render`   | `Renderer` trait, `render_frame` tree walk, `RecordingRenderer` (tests/determinism), `NullRenderer` (profiling). |
@@ -48,7 +49,12 @@ with a minimal JS bootstrap instead of the React editor.
 ### Scopes
 
 Selection, hit-testing and transform sessions work within a **scope**: the
-symbol whose elements are editable, plus its symbol→stage matrix. Today the
+symbol whose elements are editable, its symbol→stage matrix, and the
+**frame** of its timeline being edited. Every query evaluates the scene at
+that frame, so you can select an object mid-tween. Direct manipulation of
+interpolated ("tweened") frames is refused: the user inserts a keyframe (F6)
+to pose there. Property edits on a tweened frame apply to the tween's start
+keyframe, and the panel says so. Today the
 scope is always the root timeline with the identity matrix. Phase 5's
 edit-in-place supplies other scopes without changing the query or interaction
 code.
@@ -81,7 +87,9 @@ the same call sequence (asserted in tests).
 
 ### Undo contract
 
-Every mutation is an `Edit`, and every transaction is undoable, including
+Every mutation is an `Edit`. Timeline structure changes (frames,
+keyframes, tweens) use one edit, `SetKeyframes`, which replaces a layer's
+keyframe list and so inverts trivially. Every transaction is undoable, including
 layer visibility/lock, renames and reordering. By design:
 `Project::next_id` is monotonic and not rolled back (ids are never reused),
 and loading a file replaces the document and clears history.
@@ -106,6 +114,13 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
   snap)` (returns snap guides) → `endTransform()` or `cancelTransform()`.
   Path and gradient drags follow the same pattern with
   `beginEdit(id, target)` / `updateEdit` / `endEdit` / `cancelEdit`.
+* **Timeline**: `setFrame` moves the editing playhead (all queries and
+  commands use it). `timelineLength`, `insertFrames`, `removeFrames`,
+  `insertKeyframe` (copy or blank), `clearKeyframe`, `setTween`, and
+  `easingCurveJson` (samples a curve for the easing editor, so the UI never
+  evaluates easing itself). `render(…, onionJson)` takes onion settings.
+  Playback is driven by the UI's clock: frame = start + ⌊elapsed·fps⌋,
+  looping or stopping at the end, calling `setFrame` + `render`.
 * **Pen**: `penDown` / `penDrag` / `penUp` / `penHover` feed the core's pen
   state machine. `penPreviewJson` returns what to draw, and `penFinish`
   creates the path. **Pencil**: the UI collects raw pointer samples and

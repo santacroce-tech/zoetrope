@@ -104,12 +104,7 @@ button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
 .viewport canvas:last-child { touch-action: none; }
 
 /* ---------- side panels ---------- */
-.side {
-  display: grid; grid-template-rows: minmax(0, 1fr) minmax(160px, 40%);
-  background: var(--panel); border-left: 1px solid var(--border); min-height: 0;
-}
-.side-top { overflow: auto; min-height: 0; }
-.side-bottom { overflow: auto; min-height: 0; border-top: 1px solid var(--border); }
+.side { background: var(--panel); border-left: 1px solid var(--border); min-height: 0; overflow: auto; }
 .panel-title {
   display: flex; align-items: center; gap: 6px;
   padding: 7px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
@@ -142,11 +137,11 @@ button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
 .btn-row button { flex: 1; padding: 3px 0; }
 .hint { color: var(--muted); padding: 0 10px; line-height: 1.5; }
 
-/* layers */
-.layers ul { list-style: none; margin: 0; padding: 0 0 8px; }
+/* layers (timeline name column) */
+.layer-list { list-style: none; margin: 0; padding: 0; }
 .layer-row {
-  display: flex; align-items: center; gap: 4px; padding: 3px 6px; cursor: pointer;
-  white-space: nowrap; user-select: none; border-top: 2px solid transparent; border-bottom: 2px solid transparent;
+  display: flex; align-items: center; gap: 4px; padding: 0 6px; height: 22px; cursor: pointer;
+  white-space: nowrap; user-select: none; border-top: 1px solid transparent; border-bottom: 1px solid #2f2f3a;
 }
 .layer-row:hover { background: var(--panel-2); }
 .layer-row.active { background: #4b2a3a; box-shadow: inset 2px 0 0 var(--accent); }
@@ -174,3 +169,38 @@ button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
 .status .msg { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .status .msg.error { color: var(--error); }
 .status .right { margin-left: auto; }
+
+/* ---------- timeline ---------- */
+.timeline {
+  height: 230px; display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel); border-top: 1px solid var(--border);
+}
+.tl-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.tl-toolbar .group.first { padding-left: 0; border-left: none; }
+.tl-toolbar button { padding: 2px 7px; }
+.frame-counter { min-width: 64px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.onion-range { display: flex; align-items: center; gap: 2px; color: var(--muted); }
+.onion-range input { width: 38px; }
+.layer-actions { margin-left: auto; }
+.tl-scroll { flex: 1; overflow: auto; min-height: 0; position: relative; }
+.tl-grid { display: grid; grid-template-columns: 230px auto; grid-template-rows: 20px auto; }
+.tl-corner {
+  position: sticky; top: 0; left: 0; z-index: 3; background: #24242d; color: var(--muted);
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 8px;
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.tl-header { position: sticky; top: 0; z-index: 2; display: block; cursor: ew-resize; border-bottom: 1px solid var(--border); }
+.tl-names { position: sticky; left: 0; z-index: 1; background: var(--panel); border-right: 1px solid var(--border); }
+.tl-cells { display: block; cursor: pointer; }
+
+/* ---------- easing editor ---------- */
+.easing-editor select { width: 100%; margin-bottom: 6px; }
+.easing-plot { width: 100%; height: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; touch-action: none; }
+.easing-plot .unit { fill: rgba(255,255,255,0.03); stroke: #3a3a48; stroke-dasharray: 3 3; }
+.easing-plot .diag { stroke: #3a3a48; }
+.easing-plot .curve { fill: none; stroke: var(--accent); stroke-width: 2; }
+.easing-plot .arm { stroke: #7fc4ff; stroke-width: 1; }
+.easing-plot .cp { fill: #fff; stroke: #2f9bff; stroke-width: 1.5; cursor: grab; }
+.bezier-values { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.hint.flush { padding: 0; margin: 4px 0; }
+.hint.warn { color: #f5c518; padding: 6px 10px; margin: 0; border-bottom: 1px solid var(--border); }

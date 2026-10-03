@@ -13,7 +13,9 @@
 //! Ordering conventions (stored data):
 //! - Layer lists (`Symbol::layers`, `Layer::children`) are bottom-to-top:
 //!   index 0 is drawn first (furthest back).
-//! - `Layer::elements` is back-to-front: index 0 is drawn first.
+//! - `Keyframe::elements` is back-to-front: index 0 is drawn first.
+//!
+//! Content layers hold their elements in keyframes (see `timeline`).
 
 use crate::asset::{Asset, AssetKind};
 use crate::color::{Color, ColorTransform};
@@ -21,6 +23,7 @@ use crate::error::{Error, Result};
 use crate::geom::Path;
 use crate::math::{Matrix, Point};
 pub use crate::paint::{FillRule, GradientStop, LineCap, LineJoin, Paint, PaintStyle, Stroke};
+pub use crate::timeline::{EasePreset, Easing, Keyframe, Tween, TweenKind};
 pub use crate::vector::{HandleSide, Node, NodeKind, NodeRef, SubPath, VectorPath};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -107,9 +110,9 @@ pub struct Layer {
     pub visible: bool,
     #[serde(default)]
     pub locked: bool,
-    /// Content layers only.
+    /// Content layers only: contiguous keyframe spans from frame 0.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub elements: Vec<Element>,
+    pub keyframes: Vec<Keyframe>,
     /// Folders only. Bottom-to-top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Layer>,
@@ -129,7 +132,8 @@ fn is_one(v: &f64) -> bool {
 
 impl Layer {
     pub fn new(id: LayerId, name: impl Into<String>, kind: LayerKind) -> Layer {
-        Layer { id, name: name.into(), kind, visible: true, locked: false, elements: Vec::new(), children: Vec::new() }
+        let keyframes = if kind == LayerKind::Folder { Vec::new() } else { vec![Keyframe::blank(1)] };
+        Layer { id, name: name.into(), kind, visible: true, locked: false, keyframes, children: Vec::new() }
     }
 
     pub fn is_folder(&self) -> bool {
@@ -167,6 +171,10 @@ pub struct Tint {
 #[serde(rename_all = "camelCase")]
 pub struct Element {
     pub id: ElementId,
+    /// Identity across keyframes for tweening: copies made by "insert
+    /// keyframe" share their source's track. `None` means "my own id".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<u32>,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -202,6 +210,7 @@ impl Element {
     pub fn new(id: ElementId, kind: ElementKind) -> Element {
         Element {
             id,
+            track: None,
             name: String::new(),
             transform: Transform::default(),
             opacity: 1.0,
@@ -209,6 +218,10 @@ impl Element {
             tint: None,
             kind,
         }
+    }
+
+    pub fn track(&self) -> u32 {
+        self.track.unwrap_or(self.id.0)
     }
 
     /// Tint then opacity (they touch disjoint channels, so order is moot).
@@ -494,6 +507,7 @@ impl Geometry {
 pub struct ElementLocation {
     pub symbol: SymbolId,
     pub layer: LayerId,
+    pub keyframe: usize,
     pub index: usize,
 }
 
@@ -504,6 +518,23 @@ pub struct LayerLocation {
     /// Containing folder, or `None` for the symbol's top level.
     pub parent: Option<LayerId>,
     pub index: usize,
+}
+
+/// Structural checks on a layer's keyframes: content layers need at least
+/// one keyframe, every span is ≥ 1 frame, and tween easings are valid.
+pub fn check_keyframes(l: &Layer) -> Result<()> {
+    if !l.is_folder() && l.keyframes.is_empty() {
+        return Err(Error::Invalid(format!("layer {} has no keyframes", l.id.0)));
+    }
+    for k in &l.keyframes {
+        if k.duration == 0 {
+            return Err(Error::Invalid(format!("layer {} has a zero-length keyframe", l.id.0)));
+        }
+        if let Some(t) = &k.tween {
+            t.easing.validate()?;
+        }
+    }
+    Ok(())
 }
 
 /// Calls `f` for every layer in the tree (depth-first, parents before children).
@@ -579,8 +610,10 @@ impl Project {
             let mut found = None;
             walk_layers(&s.layers, &mut |l| {
                 if found.is_none() {
-                    if let Some(i) = l.elements.iter().position(|e| e.id == id) {
-                        found = Some(ElementLocation { symbol: s.id, layer: l.id, index: i });
+                    for (k, kf) in l.keyframes.iter().enumerate() {
+                        if let Some(i) = kf.elements.iter().position(|e| e.id == id) {
+                            found = Some(ElementLocation { symbol: s.id, layer: l.id, keyframe: k, index: i });
+                        }
                     }
                 }
             });
@@ -652,12 +685,12 @@ impl Project {
 
     pub fn element(&self, id: ElementId) -> Option<&Element> {
         let loc = self.locate(id)?;
-        Some(&self.layer(loc.layer)?.elements[loc.index])
+        Some(&self.layer(loc.layer)?.keyframes[loc.keyframe].elements[loc.index])
     }
 
     pub fn element_mut(&mut self, id: ElementId) -> Option<&mut Element> {
         let loc = self.locate(id)?;
-        Some(&mut self.layer_mut(loc.layer)?.elements[loc.index])
+        Some(&mut self.layer_mut(loc.layer)?.keyframes[loc.keyframe].elements[loc.index])
     }
 
     pub fn require_element(&self, id: ElementId) -> Result<&Element> {
@@ -736,13 +769,14 @@ impl Project {
                 }
                 result = (|| {
                     claim(l.id.0)?;
-                    if l.is_folder() && !l.elements.is_empty() {
-                        return invalid(format!("folder {} contains elements", l.id.0));
+                    if l.is_folder() && !l.keyframes.is_empty() {
+                        return invalid(format!("folder {} contains keyframes", l.id.0));
                     }
                     if !l.is_folder() && !l.children.is_empty() {
                         return invalid(format!("layer {} has child layers but is not a folder", l.id.0));
                     }
-                    for e in &l.elements {
+                    check_keyframes(l)?;
+                    for e in l.all_elements() {
                         claim(e.id.0)?;
                         e.validate()?;
                         match e.kind {
@@ -776,7 +810,7 @@ impl Symbol {
     pub fn instanced_symbols(&self) -> Vec<SymbolId> {
         let mut out = Vec::new();
         walk_layers(&self.layers, &mut |l| {
-            out.extend(l.elements.iter().filter_map(|e| match e.kind {
+            out.extend(l.all_elements().filter_map(|e| match e.kind {
                 ElementKind::Instance { symbol } => Some(symbol),
                 _ => None,
             }))

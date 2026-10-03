@@ -10,9 +10,12 @@ import {
   type PaintStyle,
   type StageInfo,
   type StrokeData,
+  type Tween,
+  type TweenKind,
 } from "../engine";
 import { ColorField, NumberField } from "./fields";
 import { GradientEditor } from "./GradientEditor";
+import { EasingEditor } from "./EasingEditor";
 
 interface Props {
   engine: Engine;
@@ -20,6 +23,8 @@ interface Props {
   selection: number[];
   stage: StageInfo;
   layers: LayerNode[];
+  /** Timeline cell last clicked; shows frame/tween properties when set. */
+  frameTarget: { layer: LayerNode; frame: number } | null;
   /** Runs a core command, reporting errors and refreshing views. */
   run: (fn: () => unknown) => void;
 }
@@ -50,12 +55,13 @@ function kindLabel(info: ElementInfo): string {
   return { rect: "Rectangle", ellipse: "Ellipse", line: "Line", path: "Path" }[e.geometry!.kind];
 }
 
-export function PropertiesPanel({ engine, selection, stage, layers, run }: Props) {
+export function PropertiesPanel({ engine, selection, stage, layers, frameTarget, run }: Props) {
   const [toStage, setToStage] = useState(false);
   const infos: ElementInfo[] = selection.map((id) => JSON.parse(engine.elementJson(id))).filter(Boolean);
   const ids = JSON.stringify(selection);
   const patch = (p: object) => run(() => engine.patchElements(ids, JSON.stringify(p)));
 
+  if (frameTarget) return <FramePanel engine={engine} target={frameTarget} run={run} />;
   if (infos.length === 0) return <StagePanel engine={engine} stage={stage} run={run} />;
 
   const first = infos[0];
@@ -70,6 +76,9 @@ export function PropertiesPanel({ engine, selection, stage, layers, run }: Props
   return (
     <div className="props">
       <div className="panel-title">{single ? kindLabel(first) : `${infos.length} objects`}</div>
+      {infos.some((i) => i.tweened) && (
+        <p className="hint warn">This frame is tweened: values below edit the tween's start keyframe. Insert a keyframe here (F6) to pose it.</p>
+      )}
 
       {single && (
         <section>
@@ -427,5 +436,78 @@ function FillStrokeSection(props: { engine: Engine; infos: ElementInfo[]; closed
         </div>
       )}
     </section>
+  );
+}
+
+function FramePanel({ engine, target, run }: { engine: Engine; target: { layer: LayerNode; frame: number }; run: Props["run"] }) {
+  const { layer, frame } = target;
+  if (layer.kind === "folder") {
+    return (
+      <div className="props">
+        <div className="panel-title">Folder “{layer.name}”</div>
+        <p className="hint">Folders have no frames. Select a layer’s frame to edit tweens.</p>
+      </div>
+    );
+  }
+  const index = layer.keyframes.findIndex((k) => frame >= k.start && frame < k.start + k.duration);
+  const kf = index >= 0 ? layer.keyframes[index] : null;
+  const hasNext = index >= 0 && index + 1 < layer.keyframes.length;
+  const ids = JSON.stringify([layer.id]);
+  const setTween = (t: Tween | null) => kf && run(() => engine.setTween(ids, kf.start, JSON.stringify(t)));
+  const tween = kf?.tween ?? null;
+
+  return (
+    <div className="props">
+      <div className="panel-title">
+        Frame {frame + 1} — {layer.name}
+      </div>
+      <section>
+        {kf ? (
+          <p className="hint flush">
+            {kf.start === frame ? "Keyframe" : "Frame"} in span {kf.start + 1}–{kf.start + kf.duration}
+            {kf.empty ? " (blank)" : ""}
+          </p>
+        ) : (
+          <p className="hint flush">Past the end of this layer. Insert a frame (F5) or keyframe (F6) to extend it.</p>
+        )}
+        {kf && (
+          <>
+            <div className="row">
+              <span className="field-label">Tween</span>
+              <select
+                value={tween?.kind ?? "none"}
+                disabled={!hasNext && !tween}
+                title={hasNext ? "" : "Add a later keyframe (F6) to tween toward"}
+                onChange={(e) =>
+                  setTween(e.target.value === "none" ? null : { kind: e.target.value as TweenKind, easing: tween?.easing ?? { type: "linear" }, rotate: tween?.rotate ?? 0 })
+                }
+              >
+                <option value="none">None</option>
+                <option value="motion">Motion (transform, color)</option>
+                <option value="shape">Shape (also geometry, paint)</option>
+              </select>
+            </div>
+            {!hasNext && <p className="hint flush">Add a later keyframe (F6) to tween toward.</p>}
+            {tween && (
+              <>
+                <div className="row">
+                  <NumberField
+                    label="Spins"
+                    precision={0}
+                    min={-20}
+                    max={20}
+                    title="Extra full turns (positive = clockwise)"
+                    value={tween.rotate ?? 0}
+                    onCommit={(rotate) => setTween({ ...tween, rotate })}
+                  />
+                </div>
+                <h4>Easing</h4>
+                <EasingEditor engine={engine} easing={tween.easing} onChange={(easing) => setTween({ ...tween, easing })} />
+              </>
+            )}
+          </>
+        )}
+      </section>
+    </div>
   );
 }

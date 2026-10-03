@@ -29,7 +29,8 @@ export interface LayerNode {
   kind: LayerKind;
   visible: boolean;
   locked: boolean;
-  elementCount: number;
+  /** Keyframe spans (content layers). */
+  keyframes: KeyframeView[];
   /** Top (front-most) first. */
   children: LayerNode[];
 }
@@ -111,6 +112,8 @@ export interface ElementInfo {
   contentHeight: number;
   bounds: Rect | null;
   sourceName: string | null;
+  /** Shown interpolated at the current frame (inside a tween): on-stage edits are disabled. */
+  tweened: boolean;
 }
 
 export interface SelectionGeometry {
@@ -256,4 +259,50 @@ export function cssPaint(p: PaintStyle | Paint | null | undefined): string {
   if (p.type === "solid") return p.color;
   const stops = p.stops.map((s) => `${s.color} ${(s.offset * 100).toFixed(1)}%`).join(", ");
   return p.type === "linear" ? `linear-gradient(90deg, ${stops})` : `radial-gradient(circle, ${stops})`;
+}
+
+// ---------- Phase 4: timeline ----------
+
+export type EasePreset =
+  | "easeInQuad" | "easeOutQuad" | "easeInOutQuad"
+  | "easeInCubic" | "easeOutCubic" | "easeInOutCubic"
+  | "easeInSine" | "easeOutSine" | "easeInOutSine"
+  | "easeInBack" | "easeOutBack" | "easeInOutBack"
+  | "easeInBounce" | "easeOutBounce" | "easeInOutBounce"
+  | "easeInElastic" | "easeOutElastic" | "easeInOutElastic";
+
+export const EASE_PRESETS: EasePreset[] = [
+  "easeInQuad", "easeOutQuad", "easeInOutQuad",
+  "easeInCubic", "easeOutCubic", "easeInOutCubic",
+  "easeInSine", "easeOutSine", "easeInOutSine",
+  "easeInBack", "easeOutBack", "easeInOutBack",
+  "easeInBounce", "easeOutBounce", "easeInOutBounce",
+  "easeInElastic", "easeOutElastic", "easeInOutElastic",
+];
+
+export type Easing =
+  | { type: "linear" }
+  | { type: "preset"; name: EasePreset }
+  | { type: "bezier"; x1: number; y1: number; x2: number; y2: number };
+
+export type TweenKind = "motion" | "shape";
+
+export interface Tween {
+  kind: TweenKind;
+  easing: Easing;
+  /** Extra full turns (positive = clockwise). */
+  rotate?: number;
+}
+
+export interface KeyframeView {
+  start: number;
+  duration: number;
+  empty: boolean;
+  tween?: Tween;
+}
+
+export interface Onion {
+  before: number;
+  after: number;
+  alpha: number;
 }

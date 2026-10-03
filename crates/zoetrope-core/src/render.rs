@@ -13,6 +13,8 @@ use crate::color::{Color, ColorTransform};
 use crate::geom::Path;
 use crate::math::Matrix;
 use crate::model::*;
+use crate::query::child_frame;
+use crate::timeline::{evaluate_layer, is_tweened_frame};
 
 /// Per-frame setup handed to the backend.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,21 +54,39 @@ pub struct RenderOptions {
     pub clip_to_stage: bool,
     /// Draw guide layers (editor: yes; player/export: no).
     pub show_guides: bool,
+    /// Editor onion skinning of the root timeline.
+    pub onion: Option<Onion>,
 }
 
 impl RenderOptions {
     pub fn player(view: Matrix) -> Self {
-        RenderOptions { view, clip_to_stage: true, show_guides: false }
+        RenderOptions { view, clip_to_stage: true, show_guides: false, onion: None }
     }
+}
+
+/// Onion skin (root timeline, editor only): on each unlocked layer, the
+/// `before`/`after` neighbouring frames are drawn faded (tinted blue / green)
+/// just beneath that layer's current content, so animated objects show their
+/// path even over opaque backgrounds on lower layers. Frames that look the
+/// same as the current one are skipped. Nearer frames are stronger.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Onion {
+    pub before: u32,
+    pub after: u32,
+    /// Opacity of the nearest onion frame (0..1).
+    #[serde(default = "onion_alpha")]
+    pub alpha: f64,
+}
+
+fn onion_alpha() -> f64 {
+    0.35
 }
 
 /// Renders frame `frame` of the project. Deterministic: the same project,
 /// frame and options always produce the same sequence of renderer calls.
 ///
-/// Phase 2 note: the model has no timelines yet, so `frame` does not affect
-/// output. It is part of the signature so callers already pass a clock.
 pub fn render_frame(project: &Project, frame: u32, opts: RenderOptions, r: &mut dyn Renderer) {
-    let _ = frame;
     r.begin_frame(&FrameInfo {
         stage_width: project.stage.width,
         stage_height: project.stage.height,
@@ -74,40 +94,79 @@ pub fn render_frame(project: &Project, frame: u32, opts: RenderOptions, r: &mut 
         view: opts.view,
         clip_to_stage: opts.clip_to_stage,
     });
-    let ctx = Ctx { project, opts };
-    ctx.symbol(project.root, opts.view, &ColorTransform::IDENTITY, 0, r);
+    let ctx = Ctx { project, opts, onion_length: project.symbol(project.root).map_or(1, |s| s.length()) };
+    ctx.symbol(project.root, frame, opts.view, &ColorTransform::IDENTITY, 0, r);
     r.end_frame();
 }
 
 struct Ctx<'a> {
     project: &'a Project,
     opts: RenderOptions,
+    /// Root timeline length (onion frames never wrap past it).
+    onion_length: u32,
 }
 
 impl Ctx<'_> {
-    fn symbol(&self, id: SymbolId, m: Matrix, ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
+    fn symbol(&self, id: SymbolId, frame: u32, m: Matrix, ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
         if depth > MAX_NESTING_DEPTH {
             return;
         }
         let Some(symbol) = self.project.symbol(id) else { return };
-        self.layers(&symbol.layers, m, ct, depth, r);
+        self.layers(&symbol.layers, frame, m, ct, depth, r);
     }
 
-    fn layers(&self, layers: &[Layer], m: Matrix, ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
+    #[allow(clippy::too_many_arguments)]
+    fn layers(&self, layers: &[Layer], frame: u32, m: Matrix, ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
         for layer in layers.iter().filter(|l| l.visible) {
             match layer.kind {
-                LayerKind::Folder => self.layers(&layer.children, m, ct, depth, r),
+                LayerKind::Folder => self.layers(&layer.children, frame, m, ct, depth, r),
                 LayerKind::Guide if !self.opts.show_guides => {}
                 LayerKind::Guide | LayerKind::Normal => {
-                    for el in &layer.elements {
-                        self.element(el, m, ct, depth, r);
+                    if depth == 0 && !layer.locked {
+                        self.onion_ghosts(layer, frame, m, r);
+                    }
+                    for el in evaluate_layer(layer, frame) {
+                        self.element(&el, frame, m, ct, depth, r);
                     }
                 }
             }
         }
     }
 
-    fn element(&self, el: &Element, parent: Matrix, parent_ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
+    /// Faded neighbouring frames of one root layer (see `Onion`).
+    fn onion_ghosts(&self, layer: &Layer, frame: u32, m: Matrix, r: &mut dyn Renderer) {
+        let Some(onion) = self.opts.onion else { return };
+        let current = layer.keyframe_at(frame).map(|(i, _)| i);
+        let static_at = |f: u32| {
+            // Same keyframe and not mid-tween at both frames ⇒ identical picture.
+            layer.keyframe_at(f).map(|(i, _)| i) == current && !is_tweened_frame(layer, f) && !is_tweened_frame(layer, frame)
+        };
+        let mut ghost = |f: u32, k: u32, n: u32, tint: Color| {
+            if static_at(f) {
+                return;
+            }
+            let alpha = onion.alpha.clamp(0.0, 1.0) * (n - k + 1) as f64 / n as f64;
+            let ct = ColorTransform::tint(tint, 0.45);
+            r.begin_group(BlendMode::Layer, alpha);
+            for el in evaluate_layer(layer, f) {
+                self.element(&el, f, m, &ct, 0, r);
+            }
+            r.end_group();
+        };
+        for k in (1..=onion.before).rev() {
+            if let Some(f) = frame.checked_sub(k) {
+                ghost(f, k, onion.before, Color::rgb(0x30, 0x60, 0xff));
+            }
+        }
+        for k in (1..=onion.after).rev() {
+            if frame + k < self.onion_length {
+                ghost(frame + k, k, onion.after, Color::rgb(0x20, 0xb0, 0x40));
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn element(&self, el: &Element, frame: u32, parent: Matrix, parent_ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
         let m = parent * el.transform.matrix();
         let grouped = el.blend != BlendMode::Normal;
         // A group applies the element's opacity when compositing, so content
@@ -138,7 +197,11 @@ impl Ctx<'_> {
                     r.draw_image(*asset, width as f64, height as f64, &m, &ct);
                 }
             }
-            ElementKind::Instance { symbol } => self.symbol(*symbol, m, &ct, depth + 1, r),
+            ElementKind::Instance { symbol } => {
+                if let Some(child) = self.project.symbol(*symbol) {
+                    self.symbol(*symbol, child_frame(child, frame), m, &ct, depth + 1, r);
+                }
+            }
         }
         if grouped {
             r.end_group();

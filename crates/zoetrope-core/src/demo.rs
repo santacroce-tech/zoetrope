@@ -42,7 +42,7 @@ impl Builder {
         let mut e = Element::new(ElementId(self.id()), kind);
         e.name = name.into();
         e.transform = transform;
-        self.project.layer_mut(layer).unwrap().elements.push(e);
+        self.project.layer_mut(layer).unwrap().keyframes[0].elements.push(e);
     }
 }
 
@@ -144,6 +144,44 @@ pub fn demo_project() -> Project {
         shape(Geometry::Line { dx: 960.0, dy: 0.0 }, None, Some((1.0, Color::rgb(0x00, 0x99, 0xff)))),
     );
 
+    animate(&mut b, scene, sky);
+
     debug_assert!(b.project.validate().is_ok());
     b.project
+}
+
+/// Two seconds of animation at 24 fps: every scene layer spans 48 frames;
+/// on the Sky layer the sun rises and grows and the cloud drifts, as an
+/// eased motion tween from frame 0 to frame 36, then holds.
+fn animate(b: &mut Builder, scene: SymbolId, sky: LayerId) {
+    const LENGTH: u32 = 48;
+    const TWEEN: u32 = 36;
+    let mut ids = Vec::new();
+    walk_layers(&b.project.symbol(scene).unwrap().layers, &mut |l| {
+        if !l.is_folder() {
+            ids.push(l.id);
+        }
+    });
+    for id in ids {
+        b.project.layer_mut(id).unwrap().keyframes[0].duration = LENGTH;
+    }
+    let start = b.project.layer(sky).unwrap().keyframes[0].elements.clone();
+    let end: Vec<Element> = start
+        .iter()
+        .map(|e| {
+            let mut c = e.clone();
+            c.track = Some(e.id.0);
+            c.id = ElementId(b.id());
+            match e.name.as_str() {
+                "sun" => c.transform = Transform { y: 60.0, scale_x: 1.15, scale_y: 1.15, ..c.transform },
+                "cloud" => c.transform.x = 700.0,
+                _ => {}
+            }
+            c
+        })
+        .collect();
+    let layer = b.project.layer_mut(sky).unwrap();
+    layer.keyframes[0].duration = TWEEN;
+    layer.keyframes[0].tween = Some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 });
+    layer.keyframes.push(Keyframe { duration: LENGTH - TWEEN, elements: end, tween: None });
 }

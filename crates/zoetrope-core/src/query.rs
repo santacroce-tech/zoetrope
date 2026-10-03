@@ -9,19 +9,35 @@ use crate::asset::AssetKind;
 use crate::geom::Rect;
 use crate::math::{Matrix, Point};
 use crate::model::*;
+use crate::timeline::evaluate_layer;
 use serde::Serialize;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Scope {
     pub symbol: SymbolId,
     /// Symbol space → stage space.
     pub matrix: Matrix,
+    /// The frame of `symbol`'s timeline being viewed/edited.
+    pub frame: u32,
 }
 
 impl Scope {
     pub fn root(p: &Project) -> Scope {
-        Scope { symbol: p.root, matrix: Matrix::IDENTITY }
+        Scope { symbol: p.root, matrix: Matrix::IDENTITY, frame: 0 }
     }
+
+    pub fn at(self, frame: u32) -> Scope {
+        Scope { frame, ..self }
+    }
+}
+
+/// The frame a nested symbol shows when its parent is at `frame`.
+///
+/// Phase 4 rule (provisional until Phase 5 defines symbol clocks): a nested
+/// timeline plays in sync with its parent and loops.
+pub fn child_frame(child: &Symbol, frame: u32) -> u32 {
+    frame % child.length()
 }
 
 /// Uniform scale estimate of a matrix (geometric mean of axis scales).
@@ -29,9 +45,30 @@ pub fn scale_factor(m: &Matrix) -> f64 {
     m.determinant().abs().sqrt()
 }
 
+/// One element as shown at a frame (interpolated when tweened), with its
+/// layer's effective lock state.
+pub struct SceneElement<'a> {
+    pub element: Cow<'a, Element>,
+    pub layer: LayerId,
+    pub locked: bool,
+}
+
+/// Elements of `symbol` visible at `frame`, in render order (back first).
+pub fn scene_elements<'a>(p: &'a Project, symbol: SymbolId, frame: u32) -> Vec<SceneElement<'a>> {
+    let Some(sym) = p.symbol(symbol) else { return Vec::new() };
+    sym.content_layers()
+        .into_iter()
+        .filter(|(_, vis, _)| *vis)
+        .flat_map(|(l, _, locked)| {
+            evaluate_layer(l, frame).into_iter().map(move |element| SceneElement { element, layer: l.id, locked })
+        })
+        .collect()
+}
+
 /// Bounds of `kind`'s content drawn through `m`. `None` if it draws nothing
-/// (e.g. an empty symbol).
-pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, depth: usize) -> Option<Rect> {
+/// (e.g. an empty symbol). `frame` is the frame of the timeline the element
+/// sits in (nested symbols derive theirs from it).
+pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, frame: u32, depth: usize) -> Option<Rect> {
     match kind {
         ElementKind::Shape(s) => {
             let b = s.geometry.to_path().bounds(m)?;
@@ -49,38 +86,45 @@ pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, depth: usize)
                 return None;
             }
             let sym = p.symbol(*symbol)?;
-            Rect::union_all(sym.content_layers().into_iter().filter(|(_, vis, _)| *vis).flat_map(|(l, _, _)| {
-                l.elements
-                    .iter()
-                    .filter_map(move |e| content_bounds(p, &e.kind, &(*m * e.transform.matrix()), depth + 1))
-            }))
+            let f = child_frame(sym, frame);
+            Rect::union_all(
+                scene_elements(p, *symbol, f)
+                    .into_iter()
+                    .filter_map(|se| content_bounds(p, &se.element.kind, &(*m * se.element.transform.matrix()), f, depth + 1)),
+            )
         }
     }
 }
 
-/// An element's bounds in its parent symbol's space.
-pub fn element_bounds(p: &Project, e: &Element) -> Option<Rect> {
-    content_bounds(p, &e.kind, &e.transform.matrix(), 0)
+/// An element's bounds in its parent symbol's space, with nested content at `frame`.
+pub fn element_bounds(p: &Project, e: &Element, frame: u32) -> Option<Rect> {
+    content_bounds(p, &e.kind, &e.transform.matrix(), frame, 0)
+}
+
+/// An element as displayed in the scope's current frame, or `None` if it
+/// isn't shown there (other keyframe, hidden layer, deleted).
+pub fn displayed<'a>(p: &'a Project, scope: &Scope, id: ElementId) -> Option<Cow<'a, Element>> {
+    let loc = p.locate(id)?;
+    if loc.symbol != scope.symbol {
+        return None;
+    }
+    let layer = p.layer(loc.layer)?;
+    evaluate_layer(layer, scope.frame).into_iter().find(|e| e.id == id)
 }
 
 /// Topmost selectable element of the scope under stage point `pt`.
 /// `tolerance` is in stage units (callers convert from screen pixels).
 pub fn hit_test(p: &Project, scope: &Scope, pt: Point, tolerance: f64) -> Option<ElementId> {
-    let sym = p.symbol(scope.symbol)?;
-    for (layer, visible, locked) in sym.content_layers().into_iter().rev() {
-        if !visible || locked {
-            continue;
-        }
-        for e in layer.elements.iter().rev() {
-            if hits(p, &e.kind, &(scope.matrix * e.transform.matrix()), pt, tolerance, 0) {
-                return Some(e.id);
-            }
-        }
-    }
-    None
+    scene_elements(p, scope.symbol, scope.frame)
+        .iter()
+        .rev()
+        .filter(|se| !se.locked)
+        .find(|se| hits(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), pt, tolerance, scope.frame, 0))
+        .map(|se| se.element.id)
 }
 
-fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, depth: usize) -> bool {
+#[allow(clippy::too_many_arguments)]
+fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, frame: u32, depth: usize) -> bool {
     match kind {
         ElementKind::Shape(s) => {
             let Some(inv) = m.invert() else { return false };
@@ -104,9 +148,11 @@ fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, depth:
                 return false;
             }
             let Some(sym) = p.symbol(*symbol) else { return false };
-            sym.content_layers().into_iter().rev().filter(|(_, vis, _)| *vis).any(|(l, _, _)| {
-                l.elements.iter().rev().any(|e| hits(p, &e.kind, &(*m * e.transform.matrix()), pt, tol, depth + 1))
-            })
+            let f = child_frame(sym, frame);
+            scene_elements(p, *symbol, f)
+                .iter()
+                .rev()
+                .any(|se| hits(p, &se.element.kind, &(*m * se.element.transform.matrix()), pt, tol, f, depth + 1))
         }
     }
 }
@@ -115,44 +161,39 @@ fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, depth:
 /// whether the point is on its stroke or its fill (eyedropper). Locked
 /// layers are included; hidden ones are not.
 pub fn pick_shape(p: &Project, scope: &Scope, pt: Point, tolerance: f64) -> Option<(Shape, crate::interact::PaintPart)> {
-    let sym = p.symbol(scope.symbol)?;
-    pick_in_layers(p, sym, &scope.matrix, pt, tolerance, 0)
+    pick_in(p, scope.symbol, scope.frame, &scope.matrix, pt, tolerance, 0)
 }
 
-fn pick_in_layers(p: &Project, sym: &Symbol, m: &Matrix, pt: Point, tol: f64, depth: usize) -> Option<(Shape, crate::interact::PaintPart)> {
+fn pick_in(p: &Project, symbol: SymbolId, frame: u32, m: &Matrix, pt: Point, tol: f64, depth: usize) -> Option<(Shape, crate::interact::PaintPart)> {
     use crate::interact::PaintPart;
     if depth > MAX_NESTING_DEPTH {
         return None;
     }
-    for (layer, visible, _) in sym.content_layers().into_iter().rev() {
-        if !visible {
-            continue;
-        }
-        for e in layer.elements.iter().rev() {
-            let em = *m * e.transform.matrix();
-            match &e.kind {
-                ElementKind::Shape(s) => {
-                    let Some(inv) = em.invert() else { continue };
-                    let q = inv.apply(pt);
-                    let path = s.geometry.to_path();
-                    if let Some(st) = &s.stroke {
-                        if path.distance_to_outline(q) <= st.width / 2.0 + tol / scale_factor(&em) {
-                            return Some((s.clone(), PaintPart::Stroke));
-                        }
-                    }
-                    if s.fill.is_some() && s.geometry.is_fillable() && path.contains_with(q, s.fill_rule) {
-                        return Some((s.clone(), PaintPart::Fill));
+    for se in scene_elements(p, symbol, frame).iter().rev() {
+        let e = &se.element;
+        let em = *m * e.transform.matrix();
+        match &e.kind {
+            ElementKind::Shape(s) => {
+                let Some(inv) = em.invert() else { continue };
+                let q = inv.apply(pt);
+                let path = s.geometry.to_path();
+                if let Some(st) = &s.stroke {
+                    if path.distance_to_outline(q) <= st.width / 2.0 + tol / scale_factor(&em) {
+                        return Some((s.clone(), PaintPart::Stroke));
                     }
                 }
-                ElementKind::Instance { symbol } => {
-                    if let Some(child) = p.symbol(*symbol) {
-                        if let Some(hit) = pick_in_layers(p, child, &em, pt, tol, depth + 1) {
-                            return Some(hit);
-                        }
-                    }
+                if s.fill.is_some() && s.geometry.is_fillable() && path.contains_with(q, s.fill_rule) {
+                    return Some((s.clone(), PaintPart::Fill));
                 }
-                ElementKind::Bitmap { .. } => {}
             }
+            ElementKind::Instance { symbol: child } => {
+                if let Some(sym) = p.symbol(*child) {
+                    if let Some(hit) = pick_in(p, *child, child_frame(sym, frame), &em, pt, tol, depth + 1) {
+                        return Some(hit);
+                    }
+                }
+            }
+            ElementKind::Bitmap { .. } => {}
         }
     }
     None
@@ -163,19 +204,15 @@ fn pick_in_layers(p: &Project, sym: &Symbol, m: &Matrix, pt: Point, tol: f64, de
 pub fn marquee(p: &Project, scope: &Scope, rect: Rect) -> Vec<ElementId> {
     selectable(p, scope)
         .into_iter()
-        .filter(|e| content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0).is_some_and(|b| b.intersects(&rect)))
+        .filter(|e| content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0).is_some_and(|b| b.intersects(&rect)))
         .map(|e| e.id)
         .collect()
 }
 
-/// Elements of the scope on visible, unlocked layers, in render order.
-pub fn selectable<'a>(p: &'a Project, scope: &Scope) -> Vec<&'a Element> {
-    let Some(sym) = p.symbol(scope.symbol) else { return Vec::new() };
-    sym.content_layers()
-        .into_iter()
-        .filter(|(_, vis, locked)| *vis && !locked)
-        .flat_map(|(l, _, _)| l.elements.iter())
-        .collect()
+/// Elements shown in the scope's frame on visible, unlocked layers, in
+/// render order.
+pub fn selectable<'a>(p: &'a Project, scope: &Scope) -> Vec<Cow<'a, Element>> {
+    scene_elements(p, scope.symbol, scope.frame).into_iter().filter(|se| !se.locked).map(|se| se.element).collect()
 }
 
 /// What the editor needs to draw a selection and its handles.
@@ -201,14 +238,14 @@ pub fn selection_frame(p: &Project, scope: &Scope, ids: &[ElementId]) -> Option<
     match ids {
         [] => None,
         [id] => {
-            let e = p.element(*id)?;
-            let local = content_bounds(p, &e.kind, &Matrix::IDENTITY, 0)?;
+            let e = displayed(p, scope, *id)?;
+            let local = content_bounds(p, &e.kind, &Matrix::IDENTITY, scope.frame, 0)?;
             Some((scope.matrix * e.transform.matrix(), local))
         }
         _ => {
             let b = Rect::union_all(ids.iter().filter_map(|id| {
-                let e = p.element(*id)?;
-                content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0)
+                let e = displayed(p, scope, *id)?;
+                content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0)
             }))?;
             Some((Matrix::IDENTITY, b))
         }
@@ -220,14 +257,14 @@ pub fn selection_geometry(p: &Project, scope: &Scope, ids: &[ElementId]) -> Opti
     let items: Vec<Rect> = ids
         .iter()
         .filter_map(|id| {
-            let e = p.element(*id)?;
-            content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0)
+            let e = displayed(p, scope, *id)?;
+            content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0)
         })
         .collect();
     let bounds = Rect::union_all(items.iter().copied())?;
     let (pivot, has_own_pivot) = match ids {
         [id] => {
-            let t = p.element(*id)?.transform;
+            let t = displayed(p, scope, *id)?.transform;
             (scope.matrix.apply(Point::new(t.x, t.y)), true)
         }
         _ => (bx.center(), false),
@@ -244,7 +281,7 @@ mod tests {
         let mut found = None;
         for s in &p.symbols {
             walk_layers(&s.layers, &mut |l| {
-                if let Some(e) = l.elements.iter().find(|e| e.name == name) {
+                if let Some(e) = l.all_elements().find(|e| e.name == name) {
                     found = Some(e.id);
                 }
             });
