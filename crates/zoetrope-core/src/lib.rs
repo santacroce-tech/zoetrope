@@ -17,6 +17,7 @@ pub mod model;
 pub mod ops;
 pub mod outline;
 pub mod paint;
+pub mod player;
 pub mod query;
 pub mod render;
 pub mod timeline;

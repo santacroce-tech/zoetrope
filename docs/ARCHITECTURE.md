@@ -38,6 +38,7 @@ with a minimal JS bootstrap instead of the React editor.
 | `interact` | Direct-manipulation math: `TransformSession` (move/scale/rotate/skew/pivot drags with modifiers), `EditSession` (anchor/handle/gradient drags), `PenSession` (the pen tool's state machine), snapping (grid, objects, stage), shape-tool drags (incl. polygon/star). |
 | `vector`   | Editable `VectorPath` (subpaths of anchors with bezier handles): primitive→path conversion, split/insert, delete, convert corner⇄smooth, handle constraints, nearest-point, freehand fitting (RDP simplification + Catmull-Rom smoothing), polystar. |
 | `timeline` | Keyframes, tweens and easing (presets + cubic-bezier). `evaluate_layer(layer, frame)` produces the elements shown at a frame (interpolated when tweened); also covers path morphing for shape tweens. |
+| `player`   | The runtime: a stateful tree of per-instance clocks (movie clips) plus button pointer state and events (`Press`, `Click`). `tick`, `pointer`, `render`. Shared later by the exported player and scripting. |
 | `paint`    | `Paint` (solid, linear, radial with focal point), `PaintStyle` (geometry-free tool form, fitted to shapes), `Stroke` (caps, joins, miter, dashes), `FillRule`. |
 | `geom`     | `Path` (move/line/quad/cubic/close), deterministic flattening, containment (non-zero / even-odd), outline distance, `Rect`. |
 | `render`   | `Renderer` trait, `render_frame` tree walk, `RecordingRenderer` (tests/determinism), `NullRenderer` (profiling). |
@@ -46,11 +47,24 @@ with a minimal JS bootstrap instead of the React editor.
 | `outline`  | Panel views: the layer tree and per-element info. |
 | `demo`     | The built-in demo scene. |
 
+### Clocks
+
+`render_with_clock(project, frame, opts, &dyn Clock, …)` walks the tree
+carrying each instance's path, and asks the `Clock` which frame a nested
+symbol shows. `Stateless` applies the timeline rules directly (editing,
+scrubbing); `Player` answers from its runtime state (preview, export). See
+FORMAT.md, "Symbol timing".
+
 ### Scopes
 
 Selection, hit-testing and transform sessions work within a **scope**: the
 symbol whose elements are editable, its symbol→stage matrix, and the
-**frame** of its timeline being edited. Every query evaluates the scene at
+**frame** of its timeline being edited. Editing a symbol in place pushes an
+edit level (`Engine.levels`): the scope becomes that symbol, with the matrix
+composed down the instance path as displayed at the parent's frame. A symbol
+opened from the library sits at the stage center. `render_editing` draws the
+rest of the scene dimmed, without the edited instance, then the symbol on top.
+Drawing tools convert stage points into the scope's space. Every query evaluates the scene at
 that frame, so you can select an object mid-tween. Direct manipulation of
 interpolated ("tweened") frames is refused: the user inserts a keyframe (F6)
 to pose there. Property edits on a tweened frame apply to the tween's start
@@ -121,6 +135,14 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
   evaluates easing itself). `render(…, onionJson)` takes onion settings.
   Playback is driven by the UI's clock: frame = start + ⌊elapsed·fps⌋,
   looping or stopping at the end, calling `setFrame` + `render`.
+* **Symbols**: `convertToSymbol`, `libraryJson`, `renderSymbolPreview`,
+  `setSymbolProps`, `duplicateSymbol`, `deleteSymbol`, `swapSymbol`,
+  `placeInstance`; editing levels with `enterInstance` / `enterSymbol` /
+  `exitTo` / `breadcrumbJson` / `repairEditStack` (pops levels an undo made
+  invalid).
+* **Preview runtime** (main timeline only): `playStart`, `playTick(n)`
+  (returns the main frame; capped per call), `playPointer` (button state and
+  events), `playRender`, `playStop`.
 * **Pen**: `penDown` / `penDrag` / `penUp` / `penHover` feed the core's pen
   state machine. `penPreviewJson` returns what to draw, and `penFinish`
   creates the path. **Pencil**: the UI collects raw pointer samples and

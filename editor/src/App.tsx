@@ -9,7 +9,13 @@ import {
   type Pt,
   type ShapeStyle,
   type StageInfo,
+  type LibraryItem,
+  type Crumb,
+  type SymbolKind,
+  SYMBOL_KIND_ICON,
+  SYMBOL_KIND_LABEL,
 } from "./engine";
+import { LibraryPanel } from "./components/LibraryPanel";
 import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
 import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
 import { Timeline, type FrameOp, type OnionSettings } from "./components/Timeline";
@@ -86,6 +92,9 @@ function Editor({ engine }: { engine: Engine }) {
   const [pendingDiscard, setPendingDiscard] = useState<PendingDiscard>(null);
 
   const layers = useMemo<LayerNode[]>(() => JSON.parse(engine.layersJson()), [engine, version]);
+  const library = useMemo<LibraryItem[]>(() => JSON.parse(engine.libraryJson()), [engine, version]);
+  const crumbs = useMemo<Crumb[]>(() => JSON.parse(engine.breadcrumbJson()), [engine, version]);
+  const [convert, setConvert] = useState<{ name: string; kind: SymbolKind } | null>(null);
   const history = useMemo<HistoryState>(() => JSON.parse(engine.historyJson()), [engine, version]);
   const stage = useMemo<StageInfo>(() => JSON.parse(engine.stageJson()), [engine, version]);
 
@@ -102,30 +111,92 @@ function Editor({ engine }: { engine: Engine }) {
     [engine],
   );
 
-  // Playback: advance by wall-clock time at the stage fps.
+  // Playback at the stage fps. On the main timeline it runs the core's
+  // runtime player (movie clips keep their own clocks, buttons respond);
+  // inside a symbol it steps that symbol's timeline.
+  const [runtime, setRuntime] = useState(false);
   useEffect(() => {
     if (!playing) return;
     const length = engine.timelineLength();
     const fps = stage.fps;
     const start = frame >= length - 1 && !loop ? 0 : frame;
+    const useRuntime = engine.editDepth() === 0;
+    if (useRuntime) {
+      goTo(start);
+      engine.playStart();
+      setRuntime(true);
+    }
     const t0 = performance.now();
+    let done = 0;
     let raf = 0;
     const tick = (now: number) => {
-      let f = start + Math.floor(((now - t0) * fps) / 1000);
-      if (f >= length) {
-        if (!loop) {
-          goTo(length - 1);
-          setPlaying(false);
-          return;
-        }
-        f %= length;
+      // rAF timestamps can precede t0 (they mark the frame's start): clamp.
+      let due = Math.max(0, Math.floor(((now - t0) * fps) / 1000));
+      const atEnd = !loop && start + due >= length - 1;
+      if (atEnd) due = length - 1 - start;
+      if (useRuntime) {
+        setFrameState(engine.playTick(due - done));
+        done = due;
+      } else {
+        goTo((start + due) % length);
       }
-      goTo(f);
+      if (atEnd) return setPlaying(false);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (useRuntime) {
+        goTo(engine.playStop());
+        setRuntime(false);
+      }
+    };
   }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** After entering/leaving symbol editing: reset per-timeline UI state. */
+  const afterLevelChange = useCallback(() => {
+    setPlaying(false);
+    setSelection([]);
+    setFrameFocus(null);
+    setActiveLayer(null);
+    setFrameState(engine.frame());
+    setVersion((v) => v + 1);
+  }, [engine]);
+
+  const enterInstance = useCallback(
+    (id: number) => {
+      try {
+        engine.enterInstance(id);
+        afterLevelChange();
+      } catch (e) {
+        setMessage({ text: errorText(e), error: true });
+      }
+    },
+    [engine, afterLevelChange],
+  );
+  const enterSymbol = useCallback(
+    (symbol: number) => {
+      try {
+        engine.enterSymbol(symbol);
+        afterLevelChange();
+      } catch (e) {
+        setMessage({ text: errorText(e), error: true });
+      }
+    },
+    [engine, afterLevelChange],
+  );
+  const exitTo = useCallback(
+    (depth: number) => {
+      engine.exitTo(depth);
+      afterLevelChange();
+    },
+    [engine, afterLevelChange],
+  );
+
+  // An undo can delete the instance being edited: fall back out of it.
+  useEffect(() => {
+    if (engine.repairEditStack()) afterLevelChange();
+  }, [engine, version, afterLevelChange]);
 
   // Keep selection and the active layer valid after any change (undo, locks…).
   useEffect(() => {
@@ -332,7 +403,12 @@ function Editor({ engine }: { engine: Engine }) {
     const k = e.key.toLowerCase();
     const step = e.shiftKey ? 10 : 1;
     let handled = true;
-    if (e.key === "F5") frameOp(e.shiftKey ? "removeFrame" : "frame");
+    if (e.key === "F8") {
+      if (hasSel) setConvert({ name: `Symbol ${library.length + 1}`, kind: "movieClip" });
+      else setMessage({ text: "Select objects to convert to a symbol", error: true });
+    } else if (mod && k === "e" && selection.length === 1) enterInstance(selection[0]);
+    else if (!mod && e.key === "Escape" && !hasSel && crumbs.length > 1) exitTo(crumbs.length - 2);
+    else if (e.key === "F5") frameOp(e.shiftKey ? "removeFrame" : "frame");
     else if (e.key === "F6") frameOp(e.shiftKey ? "clear" : "key");
     else if (e.key === "F7") frameOp("blank");
     else if (!mod && e.key === "Enter") setPlaying((p) => !p);
@@ -434,6 +510,48 @@ function Editor({ engine }: { engine: Engine }) {
         </div>
       </header>
 
+      {convert && (
+        <div className="modal-backdrop" onClick={() => setConvert(null)}>
+          <form
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              const c = convert;
+              setConvert(null);
+              run(() => setSelection([engine.convertToSymbol(JSON.stringify(selection), c.name, c.kind)]));
+            }}
+          >
+            <h3>Convert to symbol</h3>
+            <label className="field wide">
+              <span className="field-label">Name</span>
+              <input autoFocus value={convert.name} onChange={(e) => setConvert({ ...convert, name: e.target.value })} />
+            </label>
+            <div className="kind-choice">
+              {(["movieClip", "graphic", "button"] as const).map((k) => (
+                <label key={k} className="check">
+                  <input type="radio" checked={convert.kind === k} onChange={() => setConvert({ ...convert, kind: k })} />
+                  {SYMBOL_KIND_ICON[k]} {SYMBOL_KIND_LABEL[k]}
+                </label>
+              ))}
+            </div>
+            <p className="hint flush">
+              {convert.kind === "movieClip" && "Own timeline: plays independently from when it appears."}
+              {convert.kind === "graphic" && "Timeline synced to the parent's frames."}
+              {convert.kind === "button" && "Up / Over / Down / Hit frames (all four start with this art)."}
+            </p>
+            <div className="btn-row">
+              <button type="button" onClick={() => setConvert(null)}>
+                Cancel
+              </button>
+              <button type="submit" disabled={!convert.name.trim()}>
+                Convert
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {pendingDiscard && (
         <div className="banner">
           Unsaved changes will be lost.
@@ -452,6 +570,23 @@ function Editor({ engine }: { engine: Engine }) {
 
       <main className="workspace">
         <ToolPalette tool={tool} onTool={setTool} style={shapeStyle} onStyle={setShapeStyle} />
+        <div className="stage-col">
+          <nav className="breadcrumb">
+            {crumbs.map((c, i) => (
+              <span key={i}>
+                {i > 0 && <span className="crumb-sep">›</span>}
+                <button
+                  className={`crumb ${i === crumbs.length - 1 ? "current" : ""}`}
+                  disabled={i === crumbs.length - 1}
+                  onClick={() => exitTo(i)}
+                  title={i === 0 ? "Main timeline" : c.kind ? SYMBOL_KIND_LABEL[c.kind] : ""}
+                >
+                  {i === 0 ? "🎬" : c.kind ? SYMBOL_KIND_ICON[c.kind] : ""} {c.label}
+                </button>
+              </span>
+            ))}
+            {crumbs.length > 1 && <span className="crumb-hint">Editing a symbol: Esc goes back up</span>}
+          </nav>
         <StageView
           engine={engine}
           version={version}
@@ -460,6 +595,12 @@ function Editor({ engine }: { engine: Engine }) {
           onSelect={setSelection}
           frame={frame}
           onion={onion.enabled && !playing ? onion : null}
+          runtime={runtime}
+          onEnterInstance={enterInstance}
+          onDropSymbol={(symbol, at) => {
+            if (activeLayer === null) return setMessage({ text: "Select a layer first", error: true });
+            run(() => setSelection([engine.placeInstance(activeLayer, symbol, at.x, at.y)]));
+          }}
           anchors={anchors}
           onAnchors={setAnchors}
           toolOptions={toolOptions}
@@ -480,16 +621,24 @@ function Editor({ engine }: { engine: Engine }) {
           }, [])}
           onDropFiles={onDropFiles}
         />
+        </div>
         <aside className="side">
-          <PropertiesPanel
-            engine={engine}
-            version={version}
-            selection={selection}
-            stage={stage}
-            layers={layers}
-            frameTarget={frameTarget ? { layer: frameTarget, frame: frameFocus!.frame } : null}
-            run={run}
-          />
+          <div className="side-top">
+            <PropertiesPanel
+              engine={engine}
+              version={version}
+              selection={selection}
+              stage={stage}
+              layers={layers}
+              frameTarget={frameTarget ? { layer: frameTarget, frame: frameFocus!.frame } : null}
+              library={library}
+              onEditInstance={enterInstance}
+              run={run}
+            />
+          </div>
+          <div className="side-bottom">
+            <LibraryPanel engine={engine} version={version} items={library} run={run} onEdit={enterSymbol} />
+          </div>
         </aside>
       </main>
 

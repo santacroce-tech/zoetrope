@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { SYMBOL_DRAG_TYPE } from "../engine";
 import type {
   DragMode,
   Engine,
@@ -60,6 +61,12 @@ interface Props {
   frame: number;
   /** Onion skin settings, or null when off. */
   onion: Onion | null;
+  /** Preview playback through the runtime player: render its state and send it the pointer. */
+  runtime: boolean;
+  /** Double-click on a symbol instance (select tool): edit it in place. */
+  onEnterInstance: (id: number) => void;
+  /** A library symbol dropped onto the stage. */
+  onDropSymbol: (symbol: number, at: Pt) => void;
   stage: StageInfo;
   selection: number[];
   onSelect: (ids: number[]) => void;
@@ -197,13 +204,18 @@ export function StageView(props: Props) {
     const dpr = fitCanvas(scene, w, h);
     const ctx = scene.getContext("2d")!;
     const t0 = performance.now();
-    p.engine.render(ctx, p.frame, v.zoom * dpr, v.panX * dpr, v.panY * dpr, false, p.settings.showGuides, JSON.stringify(p.onion));
+    if (p.runtime) p.engine.playRender(ctx, v.zoom * dpr, v.panX * dpr, v.panY * dpr, false, p.settings.showGuides);
+    else p.engine.render(ctx, p.frame, v.zoom * dpr, v.panX * dpr, v.panY * dpr, false, p.settings.showGuides, JSON.stringify(p.onion));
     p.onRenderTime(performance.now() - t0);
 
     fitCanvas(overlay, w, h);
     const o = overlay.getContext("2d")!;
     o.setTransform(dpr, 0, 0, dpr, 0, 0);
     o.clearRect(0, 0, w, h);
+    if (p.runtime) {
+      drawOverlay(o, p, v, { selection: null, path: null, gradient: null, pen: null, anchors: [] }, { kind: "idle" });
+      return;
+    }
     const chrome: Chrome = {
       selection: p.tool === "select" ? selectionGeometry() : null,
       path: p.tool === "subselect" ? pathInfo() : null,
@@ -245,7 +257,7 @@ export function StageView(props: Props) {
 
   useEffect(() => {
     requestDraw();
-  }, [requestDraw, version, selection, props.anchors, size, props.view, stage, settings, props.tool, props.frame, props.onion]);
+  }, [requestDraw, version, selection, props.anchors, size, props.view, stage, settings, props.tool, props.frame, props.onion, props.runtime]);
 
   useEffect(
     () => () => {
@@ -383,6 +395,14 @@ export function StageView(props: Props) {
     return hit;
   };
 
+  /** While previewing, the pointer drives buttons instead of editing. */
+  const runtimePointer = (e: { clientX: number; clientY: number }, down: boolean, inside = true) => {
+    const pt = toStage(live.current.view, screenPoint(e));
+    const r = JSON.parse(engine.playPointer(pt.x, pt.y, inside, down));
+    setCursor(r?.overButton ? "pointer" : "default");
+    requestDraw();
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 && e.button !== 1) return;
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -390,6 +410,7 @@ export function StageView(props: Props) {
     const s = screenPoint(e);
     const pt = toStage(v, s);
     const m = mods(e);
+    if (p.runtime) return runtimePointer(e, true);
 
     if (p.tool === "hand" || spaceDown.current || e.button === 1) {
       interaction.current = { kind: "pan", screen: s, view: v };
@@ -559,6 +580,7 @@ export function StageView(props: Props) {
     const pt = toStage(v, s);
     cursorStage.current = pt;
     p.onCursor(pt);
+    if (p.runtime) return runtimePointer(e, (e.buttons & 1) === 1);
     const it = interaction.current;
 
     switch (it.kind) {
@@ -625,6 +647,7 @@ export function StageView(props: Props) {
 
   const onPointerUp = (e: React.PointerEvent) => {
     const { props: p, view: v } = live.current;
+    if (p.runtime) return runtimePointer(e, false);
     const it = interaction.current;
     interaction.current = { kind: "idle" };
     switch (it.kind) {
@@ -697,8 +720,16 @@ export function StageView(props: Props) {
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
-    const { props: p } = live.current;
+    const { props: p, view: v } = live.current;
+    if (p.runtime) return;
     if (p.tool === "pen") return finishPen();
+    if (p.tool === "select") {
+      // Double-click a symbol instance: edit it in place.
+      const pt = toStage(v, screenPoint(e));
+      const hit = engine.hitTest(pt.x, pt.y, 3 / v.zoom);
+      if (hit !== undefined && JSON.parse(engine.elementJson(hit))?.element.type === "instance") p.onEnterInstance(hit);
+      return;
+    }
     if (p.tool !== "subselect") return;
     // Double-click an anchor: toggle corner ⇄ smooth.
     const id = single();
@@ -775,6 +806,8 @@ export function StageView(props: Props) {
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    const symbol = e.dataTransfer.getData(SYMBOL_DRAG_TYPE);
+    if (symbol) return props.onDropSymbol(Number(symbol), toStage(live.current.view, screenPoint(e)));
     const files = Array.from(e.dataTransfer.files).filter((f) => /^image\/(png|jpeg|gif)$/.test(f.type));
     if (files.length) props.onDropFiles(files, toStage(live.current.view, screenPoint(e)));
   };
@@ -793,7 +826,8 @@ export function StageView(props: Props) {
         ref={viewportRef}
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
-        onPointerLeave={() => {
+        onPointerLeave={(e) => {
+          if (live.current.props.runtime) runtimePointer(e, false, false);
           cursorStage.current = null;
           props.onCursor(null);
           requestDraw();

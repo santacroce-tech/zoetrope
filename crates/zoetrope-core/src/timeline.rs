@@ -268,22 +268,75 @@ pub fn is_tweened_frame(layer: &Layer, frame: u32) -> bool {
 /// The elements a layer shows at `frame` (interpolated when tweened). An
 /// interpolated element keeps the id of its source keyframe's element.
 pub fn evaluate_layer(layer: &Layer, frame: u32) -> Vec<Cow<'_, Element>> {
+    evaluate_layer_shown(layer, frame).into_iter().map(|s| s.element).collect()
+}
+
+/// An element as shown at a frame, with the timing facts nested symbols need.
+pub struct Shown<'a> {
+    pub element: Cow<'a, Element>,
+    /// Start frame of the keyframe span showing it (graphic symbols count from here).
+    pub keyframe_start: u32,
+    /// Start of the unbroken run of keyframes holding this element's track
+    /// with the same symbol, i.e. when this instance "appeared" (movie clips
+    /// count from here).
+    pub appeared: u32,
+}
+
+pub fn evaluate_layer_shown(layer: &Layer, frame: u32) -> Vec<Shown<'_>> {
     let Some((i, start)) = layer.keyframe_at(frame) else { return Vec::new() };
     let kf = &layer.keyframes[i];
-    let (Some(tween), Some(next)) = (&kf.tween, layer.keyframes.get(i + 1)) else {
-        return kf.elements.iter().map(Cow::Borrowed).collect();
+    let appeared = |e: &Element| -> u32 {
+        let ElementKind::Instance { symbol, .. } = e.kind else { return start };
+        let mut j = i;
+        while j > 0
+            && layer.keyframes[j - 1]
+                .elements
+                .iter()
+                .any(|p| p.track() == e.track() && matches!(p.kind, ElementKind::Instance { symbol: s, .. } if s == symbol))
+        {
+            j -= 1;
+        }
+        layer.keyframe_start(j)
     };
-    if frame == start {
-        return kf.elements.iter().map(Cow::Borrowed).collect();
-    }
-    let t = tween.easing.apply((frame - start) as f64 / kf.duration as f64);
+    let tween = match (&kf.tween, layer.keyframes.get(i + 1)) {
+        (Some(tween), Some(next)) if frame > start => Some((tween, next, tween.easing.apply((frame - start) as f64 / kf.duration as f64))),
+        _ => None,
+    };
     kf.elements
         .iter()
-        .map(|a| match next.elements.iter().find(|b| b.track() == a.track()) {
-            Some(b) => Cow::Owned(interpolate(a, b, t, tween)),
-            None => Cow::Borrowed(a),
+        .map(|a| {
+            let element = match tween.and_then(|(tw, next, t)| next.elements.iter().find(|b| b.track() == a.track()).map(|b| (tw, b, t))) {
+                Some((tw, b, t)) => Cow::Owned(interpolate(a, b, t, tw)),
+                None => Cow::Borrowed(a),
+            };
+            Shown { element, keyframe_start: start, appeared: appeared(a) }
         })
         .collect()
+}
+
+/// The frame a nested symbol shows, without runtime state ("as if played
+/// straight through from the parent's frame 0"):
+/// - graphic: `firstFrame + (parentFrame − keyframeStart)`, then loop /
+///   clamp (play once) / hold (single frame);
+/// - movie clip: frames since the instance appeared, looping;
+/// - button: the Up state (frame 0).
+pub fn instance_frame(child: &Symbol, kind: &ElementKind, shown: &Shown, parent_frame: u32) -> u32 {
+    let len = child.length();
+    let ElementKind::Instance { first_frame, loop_mode, .. } = *kind else { return 0 };
+    match child.kind {
+        SymbolKind::Graphic => graphic_frame(first_frame, loop_mode, parent_frame.saturating_sub(shown.keyframe_start), len),
+        SymbolKind::MovieClip => parent_frame.saturating_sub(shown.appeared) % len,
+        SymbolKind::Button => 0,
+    }
+}
+
+pub fn graphic_frame(first_frame: u32, mode: LoopMode, elapsed: u32, len: u32) -> u32 {
+    let len = len.max(1);
+    match mode {
+        LoopMode::Loop => (first_frame + elapsed) % len,
+        LoopMode::PlayOnce => (first_frame + elapsed).min(len - 1),
+        LoopMode::SingleFrame => first_frame.min(len - 1),
+    }
 }
 
 // ------------------------------------------------------------------ interpolation
@@ -327,6 +380,7 @@ pub fn interpolate(a: &Element, b: &Element, t: f64, tween: &Tween) -> Element {
         (ElementKind::Shape(sa), ElementKind::Shape(sb), TweenKind::Shape) => ElementKind::Shape(lerp_shape(sa, sb, t)),
         _ => a.kind.clone(),
     };
+    // Graphic timing (first frame / loop mode) follows the start keyframe.
     Element {
         id: a.id,
         track: a.track,

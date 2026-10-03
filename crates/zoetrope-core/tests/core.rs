@@ -72,9 +72,10 @@ fn demo_is_nested_and_valid() {
     p.validate().unwrap();
     let ops = record(&p);
     // sky, ground, sun, cloud + 3 flowers × (stem + 6 petals + center)
-    assert_eq!(count(&ops, |o| matches!(o, DrawOp::Fill { .. })), 4 + 3 * (1 + 6 + 1));
-    // petals+center strokes ×3, plus the guide line and the cloud outline
-    assert_eq!(count(&ops, |o| matches!(o, DrawOp::Stroke { .. })), 3 * (6 + 1) + 2);
+    // + bee (body, 2 stripes, 2 wings) + button Up (face, icon)
+    assert_eq!(count(&ops, |o| matches!(o, DrawOp::Fill { .. })), 4 + 3 * (1 + 6 + 1) + 5 + 2);
+    // petals+center strokes ×3, guide line, cloud outline, bee (body, 2 wings), button face
+    assert_eq!(count(&ops, |o| matches!(o, DrawOp::Stroke { .. })), 3 * (6 + 1) + 2 + 3 + 1);
     assert!(matches!(ops.first(), Some(DrawOp::Begin(_))));
     assert_eq!(ops.last(), Some(&DrawOp::End));
 }
@@ -161,7 +162,7 @@ fn cycles_are_rejected() {
     let flower = p.symbols.iter().find(|s| s.name == "Flower").unwrap().id;
     let layer = petal.layers[0].id;
     let id = ElementId(doc.project.alloc_id());
-    let el = Element::new(id, ElementKind::Instance { symbol: flower });
+    let el = Element::new(id, ElementKind::instance(flower));
     let err = doc.execute("bad", vec![Edit::InsertElement { layer, keyframe: 0, index: 0, element: el }]);
     assert!(matches!(err, Err(Error::Invalid(_))));
     assert!(!doc.is_dirty());
@@ -757,7 +758,7 @@ fn scrubbing_renders_are_deterministic_and_distinct() {
         assert_eq!(at(f), at(f), "frame {f} deterministic");
     }
     assert_ne!(at(10), at(11));
-    assert_eq!(at(36), at(47), "held after the tween");
+    assert_eq!(scene_transform(&p, 36, "sun"), scene_transform(&p, 47, "sun"), "held after the tween");
 }
 
 #[test]
@@ -983,4 +984,190 @@ fn gate_tweened_animation_round_trips_and_undoes() {
     assert_eq!(Project { next_id: original.next_id, ..doc.project.clone() }, original);
     while doc.redo().unwrap() {}
     assert_eq!(doc.project, end_state);
+}
+
+// ---------- Phase 5: symbols & nested timelines ----------
+
+use zoetrope_core::player::{Player, PlayerEvent};
+use zoetrope_core::render::{render_editing, EditView};
+
+fn record_player(p: &Project, pl: &Player) -> Vec<DrawOp> {
+    let mut r = RecordingRenderer::default();
+    pl.render(p, RenderOptions::player(Matrix::IDENTITY), &mut r);
+    r.ops
+}
+
+fn record_stateless(p: &Project, f: u32) -> Vec<DrawOp> {
+    let mut r = RecordingRenderer::default();
+    render_frame(p, f, RenderOptions::player(Matrix::IDENTITY), &mut r);
+    r.ops
+}
+
+fn bee_frames(p: &Project, pl: &Player) -> Vec<u32> {
+    let bees = layer_named(p, "Bees").0;
+    let mut v: Vec<(u32, u32)> = pl.clip_frames().iter().filter(|(path, _)| path.len() == 1 && path[0].0 == bees).map(|(path, f)| (path[0].1, *f)).collect();
+    v.sort();
+    v.into_iter().map(|(_, f)| f).collect()
+}
+
+#[test]
+fn movie_clips_run_independent_clocks() {
+    let p = demo_project();
+    let mut pl = Player::new(&p, 0);
+    assert_eq!(bee_frames(&p, &pl), vec![0]);
+    for _ in 0..20 {
+        pl.tick(&p);
+    }
+    // bee1 appeared at 0, bee2 at 8, bee3 at 16; each loops over 13 frames.
+    assert_eq!(pl.frame, 20);
+    assert_eq!(bee_frames(&p, &pl), vec![20 % 13, 12, 4]);
+}
+
+#[test]
+fn runtime_matches_stateless_until_the_root_loops() {
+    let p = demo_project();
+    let mut pl = Player::new(&p, 0);
+    for f in 0..48 {
+        assert_eq!(record_player(&p, &pl), record_stateless(&p, f), "frame {f}");
+        pl.tick(&p);
+    }
+    // After the root loops, a movie clip that is still on stage keeps running
+    // (bee1, present in every keyframe); the others left and will restart.
+    assert_eq!(pl.frame, 0);
+    assert_eq!(bee_frames(&p, &pl), vec![48 % 13]);
+    assert_ne!(record_player(&p, &pl), record_stateless(&p, 0));
+}
+
+#[test]
+fn graphic_symbols_follow_their_parent() {
+    let mut doc = Document::new(demo_project());
+    let bee = doc.project.symbols.iter().find(|s| s.name == "Bee").unwrap().id;
+    ops::set_symbol_props(&mut doc, bee, None, Some(SymbolKind::Graphic)).unwrap();
+    let bee2 = doc.project.layer(layer_named(&doc.project, "Bees")).unwrap().keyframes[1].elements[1].id;
+    let bees = doc.project.layer(layer_named(&doc.project, "Bees")).unwrap().keyframes.clone();
+    let child = |doc: &Document, id, f| zoetrope_core::query::child_frame_of(&doc.project, id, f);
+    assert_eq!(child(&doc, bees[0].elements[0].id, 5), 5);
+    // bee1's copy in keyframe 2 (starting at 16) restarts its graphic count there.
+    assert_eq!(child(&doc, bees[2].elements[0].id, 20), 4);
+    ops::patch_element(&mut doc, bee2, &json!({"firstFrame": 3, "loopMode": "singleFrame"})).unwrap();
+    assert_eq!(zoetrope_core::query::child_frame_of(&doc.project, bee2, 12), 3);
+    ops::patch_element(&mut doc, bee2, &json!({"loopMode": "playOnce"})).unwrap();
+    assert_eq!(zoetrope_core::query::child_frame_of(&doc.project, bee2, 15), 10);
+}
+
+#[test]
+fn buttons_respond_to_the_pointer() {
+    let p = demo_project();
+    let mut pl = Player::new(&p, 0);
+    let frame_of_button = |pl: &Player| {
+        use zoetrope_core::render::Clock;
+        let ui = layer_named(&p, "UI").0;
+        let track = find(&p, "playButton").0;
+        pl.frame(&[(ui, track)], SymbolKind::Button, 0)
+    };
+    assert_eq!(frame_of_button(&pl), 0, "up");
+    assert!(pl.pointer(&p, Some(Point::new(500.0, 300.0)), false).is_empty());
+    assert!(!pl.over_button());
+    pl.pointer(&p, Some(Point::new(110.0, 505.0)), false);
+    assert!(pl.over_button());
+    assert_eq!(frame_of_button(&pl), 1, "over");
+    let press = pl.pointer(&p, Some(Point::new(110.0, 505.0)), true);
+    assert!(matches!(&press[..], [PlayerEvent::Press { name, .. }] if name == "playButton"));
+    assert_eq!(frame_of_button(&pl), 2, "down");
+    let click = pl.pointer(&p, Some(Point::new(112.0, 506.0)), false);
+    assert!(matches!(&click[..], [PlayerEvent::Click { name, .. }] if name == "playButton"));
+    // Pressing then releasing outside is not a click.
+    pl.pointer(&p, Some(Point::new(110.0, 505.0)), true);
+    assert!(pl.pointer(&p, Some(Point::new(600.0, 100.0)), false).is_empty());
+    // The Hit frame is never drawn: the button renders its Up art (2 fills).
+    let ops_ = record_player(&p, &pl);
+    assert!(ops_.iter().all(|o| !matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, .. } if *color == Color::BLACK)));
+}
+
+#[test]
+fn convert_to_symbol_keeps_the_picture() {
+    let mut doc = Document::new(demo_project());
+    let ids = [find(&doc.project, "sun"), find(&doc.project, "cloud")];
+    let before = record(&doc.project);
+    let ground = find(&doc.project, "ground");
+    let (instance, symbol) = ops::convert_to_symbol(&mut doc, &[ground], "Ground", SymbolKind::Graphic, 0).unwrap();
+    let after = record(&doc.project);
+    assert_eq!(before.len(), after.len());
+    for (a, b) in before.iter().zip(&after) {
+        if let (DrawOp::Fill { transform: ta, .. }, DrawOp::Fill { transform: tb, .. }) = (a, b) {
+            assert!(ta.approx_eq(tb, 1e-9));
+        }
+    }
+    let inst = doc.project.element(instance).unwrap();
+    assert_eq!((inst.transform.x, inst.transform.y), (480.0, 460.0));
+    assert_eq!(doc.project.symbol(symbol).unwrap().name, "Ground");
+    // Tweened elements can't be converted mid-tween.
+    assert!(ops::convert_to_symbol(&mut doc, &ids, "Sky stuff", SymbolKind::MovieClip, 10).is_err());
+    // One undo restores everything.
+    doc.undo().unwrap();
+    assert_eq!(record(&doc.project), before);
+    assert!(doc.project.symbol(symbol).is_none());
+}
+
+#[test]
+fn library_operations() {
+    let mut doc = Document::new(demo_project());
+    let flower = doc.project.symbols.iter().find(|s| s.name == "Flower").unwrap().id;
+    let petal = doc.project.symbols.iter().find(|s| s.name == "Petal").unwrap().id;
+    ops::set_symbol_props(&mut doc, flower, Some("Daisy"), None).unwrap();
+    assert_eq!(doc.project.symbol(flower).unwrap().name, "Daisy");
+    let copy = ops::duplicate_symbol(&mut doc, flower).unwrap();
+    assert_eq!(doc.project.symbol(copy).unwrap().name, "Daisy copy");
+    doc.project.validate().unwrap();
+    assert!(ops::delete_symbol(&mut doc, flower).is_err(), "in use");
+    let root = doc.project.root;
+    assert!(ops::delete_symbol(&mut doc, root).is_err(), "root");
+    ops::delete_symbol(&mut doc, copy).unwrap();
+    // Swap: flower A becomes a petal; swapping a petal instance inside Petal → cycle.
+    let a = find(&doc.project, "flower A");
+    ops::swap_symbol(&mut doc, &[a], petal).unwrap();
+    let inner_petal = doc.project.symbol(flower).unwrap().layers[1].keyframes[0].elements[0].id;
+    assert!(ops::swap_symbol(&mut doc, &[inner_petal], flower).is_err(), "Daisy would contain itself");
+    let flowers = layer_named(&doc.project, "Flowers");
+    let placed = ops::place_instance(&mut doc, flowers, flower, Point::new(10.0, 20.0), 0).unwrap();
+    assert_eq!(doc.project.element(placed).unwrap().transform.x, 10.0);
+    let json = save_to_string(&doc.project);
+    assert_eq!(load_from_str(&json).unwrap(), doc.project);
+    while doc.undo().unwrap() {}
+    assert_eq!(Project { next_id: demo_project().next_id, ..doc.project.clone() }, demo_project());
+}
+
+#[test]
+fn edit_in_place_view_dims_context_and_skips_the_instance() {
+    let p = demo_project();
+    let b = find(&p, "flower B");
+    let flower = p.symbols.iter().find(|s| s.name == "Flower").unwrap().id;
+    let m = p.element(b).unwrap().transform.matrix();
+    let view = EditView { path: &[b], root_frame: 0, symbol: flower, frame: 0, matrix: m, context_alpha: 0.3 };
+    let mut r = RecordingRenderer::default();
+    render_editing(&p, &view, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: true, onion: None }, &mut r);
+    assert!(matches!(r.ops[1], DrawOp::BeginGroup { alpha, .. } if alpha == 0.3));
+    let end = r.ops.iter().position(|o| *o == DrawOp::EndGroup).unwrap();
+    // Context: everything but flower B (8 fills fewer); then flower B's symbol at full strength.
+    let context_fills = r.ops[..end].iter().filter(|o| matches!(o, DrawOp::Fill { .. })).count();
+    let full_fills = record(&p).iter().filter(|o| matches!(o, DrawOp::Fill { .. })).count();
+    assert_eq!(context_fills, full_fills - 8);
+    let edited_fills = r.ops[end..].iter().filter(|o| matches!(o, DrawOp::Fill { .. })).count();
+    assert_eq!(edited_fills, 8);
+}
+
+#[test]
+fn edits_inside_a_symbol_use_symbol_space() {
+    let mut doc = Document::new(demo_project());
+    let b = find(&doc.project, "flower B");
+    let flower = doc.project.symbols.iter().find(|s| s.name == "Flower").unwrap().id;
+    let scope = Scope { symbol: flower, matrix: doc.project.element(b).unwrap().transform.matrix(), frame: 0 };
+    let center = find(&doc.project, "center");
+    // Flower B sits at (480, 210) unscaled, so its center is at stage (480, 210).
+    assert_eq!(zoetrope_core::query::hit_test(&doc.project, &scope, Point::new(480.0, 210.0), 1.0), Some(center));
+    let s = TransformSession::begin(&doc.project, scope, &[center], DragMode::Move, Point::new(480.0, 210.0)).unwrap();
+    s.update(&mut doc.project, Point::new(490.0, 200.0), Modifiers::default(), &SnapConfig::default());
+    s.commit(&mut doc).unwrap();
+    let t = doc.project.element(center).unwrap().transform;
+    assert_eq!((t.x, t.y), (10.0, -10.0));
 }

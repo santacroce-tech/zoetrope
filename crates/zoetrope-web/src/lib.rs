@@ -25,11 +25,52 @@ use zoetrope_core::interact::{
 };
 use zoetrope_core::ops::{self, Align, Arrange, Distribute, LayerPatch, ShapeStyle};
 use zoetrope_core::query::{self, Scope};
-use zoetrope_core::render::{render_frame, Onion, RenderOptions};
+use zoetrope_core::player::Player;
+use zoetrope_core::render::{render_editing, render_frame, EditView, Onion, RenderOptions};
 use zoetrope_core::{
     demo, format, outline, AssetId, Document, Easing, ElementId, Error, LayerId, LayerKind, Matrix, NodeRef, PaintStyle, Point, Project, Stage,
-    Tween,
+    SymbolId, SymbolKind, Tween,
 };
+
+/// Most frames `playTick` advances in one call.
+const MAX_CATCH_UP_TICKS: u32 = 240;
+
+/// One level of symbol editing.
+struct EditLevel {
+    /// The instance entered (edit in place), or `None` when opened from the library.
+    instance: Option<ElementId>,
+    symbol: SymbolId,
+    /// The outer timeline's playhead when this level was entered.
+    parent_frame: u32,
+}
+
+/// Library thumbnails: no stage background, just the symbol.
+struct PreviewRenderer<'a>(Canvas2dRenderer<'a>);
+
+impl zoetrope_core::render::Renderer for PreviewRenderer<'_> {
+    fn begin_frame(&mut self, frame: &zoetrope_core::render::FrameInfo) {
+        let transparent = zoetrope_core::render::FrameInfo { background: zoetrope_core::Color::rgba(0, 0, 0, 0), ..frame.clone() };
+        self.0.begin_frame(&transparent);
+    }
+    fn fill_path(&mut self, path: &zoetrope_core::geom::Path, transform: &Matrix, paint: &zoetrope_core::Paint, rule: zoetrope_core::FillRule) {
+        self.0.fill_path(path, transform, paint, rule)
+    }
+    fn stroke_path(&mut self, path: &zoetrope_core::geom::Path, transform: &Matrix, stroke: &zoetrope_core::Stroke) {
+        self.0.stroke_path(path, transform, stroke)
+    }
+    fn draw_image(&mut self, asset: AssetId, width: f64, height: f64, transform: &Matrix, color: &zoetrope_core::ColorTransform) {
+        self.0.draw_image(asset, width, height, transform, color)
+    }
+    fn begin_group(&mut self, blend: zoetrope_core::BlendMode, alpha: f64) {
+        self.0.begin_group(blend, alpha)
+    }
+    fn end_group(&mut self) {
+        self.0.end_group()
+    }
+    fn end_frame(&mut self) {
+        self.0.end_frame()
+    }
+}
 
 #[derive(Default)]
 struct ImageCache {
@@ -45,6 +86,10 @@ pub struct Engine {
     pen: Option<PenSession>,
     /// Current frame of the edited timeline (the playhead).
     frame: u32,
+    /// Symbol-editing levels, outermost first (empty = main timeline).
+    levels: Vec<EditLevel>,
+    /// Runtime used during preview playback of the main timeline.
+    player: Option<Player>,
     images: Rc<RefCell<ImageCache>>,
     /// Bumped when the document is replaced, so in-flight decodes for the
     /// old document are discarded.
@@ -83,6 +128,8 @@ impl Engine {
             edit: None,
             pen: None,
             frame: 0,
+            levels: Vec::new(),
+            player: None,
             images: Rc::default(),
             generation: Rc::default(),
             pool: RefCell::default(),
@@ -95,12 +142,43 @@ impl Engine {
         self.edit = None;
         self.pen = None;
         self.frame = 0;
+        self.levels.clear();
+        self.player = None;
         *self.images.borrow_mut() = ImageCache::default();
         self.generation.set(self.generation.get() + 1);
     }
 
+    /// The edited symbol, its symbol→stage matrix and frame. Instances on
+    /// the edit path are placed as displayed at their parent's frame;
+    /// symbols opened from the library sit at the stage center.
     fn scope(&self) -> Scope {
-        Scope::root(&self.doc.project).at(self.frame)
+        let p = &self.doc.project;
+        let mut scope = Scope::root(p);
+        for level in &self.levels {
+            match level.instance {
+                Some(id) => {
+                    let parent = scope.at(level.parent_frame);
+                    if let Some(se) = query::displayed(p, &parent, id) {
+                        scope.matrix = scope.matrix * se.element.transform.matrix();
+                    }
+                }
+                None => scope.matrix = Matrix::translate(p.stage.width / 2.0, p.stage.height / 2.0),
+            }
+            scope.symbol = level.symbol;
+        }
+        scope.at(self.frame)
+    }
+
+    /// Stage point → edited symbol's space.
+    fn local(&self, x: f64, y: f64) -> Point {
+        let inv = self.scope().matrix.invert().unwrap_or(Matrix::IDENTITY);
+        inv.apply(Point::new(x, y))
+    }
+
+    fn cancel_all(&mut self) {
+        self.cancel_transform();
+        self.cancel_edit();
+        self.pen = None;
     }
 
     /// Draws `frame` into `ctx`. `scale`/`offset_*` map stage units to canvas
@@ -122,8 +200,240 @@ impl Engine {
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
-        render_frame(&self.doc.project, frame, RenderOptions { view, clip_to_stage: clip, show_guides, onion }, &mut r);
+        let opts = RenderOptions { view, clip_to_stage: clip, show_guides, onion };
+        if self.levels.is_empty() {
+            render_frame(&self.doc.project, frame, opts, &mut r);
+        } else {
+            let scope = self.scope();
+            // Context only when every level was entered in place.
+            let path: Vec<ElementId> = self.levels.iter().map_while(|l| l.instance).collect();
+            let path = if path.len() == self.levels.len() { path } else { Vec::new() };
+            let view = EditView {
+                path: &path,
+                root_frame: self.levels[0].parent_frame,
+                symbol: scope.symbol,
+                frame,
+                matrix: scope.matrix,
+                context_alpha: 0.3,
+            };
+            render_editing(&self.doc.project, &view, opts, &mut r);
+        }
         Ok(())
+    }
+
+    // ----- symbol editing -----
+
+    /// Edits the symbol of a displayed instance in place (double-click).
+    #[wasm_bindgen(js_name = enterInstance)]
+    pub fn enter_instance(&mut self, id: u32) -> Result<(), JsError> {
+        let scope = self.scope();
+        let se = query::displayed(&self.doc.project, &scope, ElementId(id)).ok_or_else(|| JsError::new("that object isn't on this frame"))?;
+        let zoetrope_core::ElementKind::Instance { symbol, .. } = se.element.kind else {
+            return Err(JsError::new("only symbol instances can be edited in place"));
+        };
+        self.cancel_all();
+        self.levels.push(EditLevel { instance: Some(ElementId(id)), symbol, parent_frame: self.frame });
+        self.frame = 0;
+        Ok(())
+    }
+
+    /// Edits a symbol on its own (from the library).
+    #[wasm_bindgen(js_name = enterSymbol)]
+    pub fn enter_symbol(&mut self, symbol: u32) -> Result<(), JsError> {
+        let id = SymbolId(symbol);
+        self.doc.project.require_symbol(id).map_err(js_err)?;
+        if id == self.doc.project.root {
+            self.exit_to(0);
+            return Ok(());
+        }
+        self.cancel_all();
+        self.levels.push(EditLevel { instance: None, symbol: id, parent_frame: self.frame });
+        self.frame = 0;
+        Ok(())
+    }
+
+    /// Leaves symbol editing down to `depth` levels (0 = main timeline),
+    /// restoring the playhead the outer timeline had.
+    #[wasm_bindgen(js_name = exitTo)]
+    pub fn exit_to(&mut self, depth: usize) {
+        if depth >= self.levels.len() {
+            return;
+        }
+        self.cancel_all();
+        self.frame = self.levels[depth].parent_frame;
+        self.levels.truncate(depth);
+    }
+
+    #[wasm_bindgen(js_name = editDepth)]
+    pub fn edit_depth(&self) -> usize {
+        self.levels.len()
+    }
+
+    /// Drops edit levels whose instance or symbol no longer exists (after
+    /// undo/delete). Returns true if anything changed.
+    #[wasm_bindgen(js_name = repairEditStack)]
+    pub fn repair_edit_stack(&mut self) -> bool {
+        let p = &self.doc.project;
+        let bad = self.levels.iter().position(|l| p.symbol(l.symbol).is_none() || l.instance.is_some_and(|id| p.element(id).is_none()));
+        match bad {
+            Some(depth) => {
+                self.exit_to(depth);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `[{ label, kind }]` from the main timeline down to the edited symbol.
+    #[wasm_bindgen(js_name = breadcrumbJson)]
+    pub fn breadcrumb_json(&self) -> String {
+        let p = &self.doc.project;
+        let mut crumbs = vec![serde_json::json!({ "label": p.symbol(p.root).map_or("Scene", |s| s.name.as_str()), "kind": "movieClip" })];
+        for l in &self.levels {
+            let sym = p.symbol(l.symbol);
+            let name = sym.map_or("?", |s| s.name.as_str());
+            let label = match l.instance.and_then(|id| p.element(id)).filter(|e| !e.name.is_empty()) {
+                Some(e) => format!("{} ({name})", e.name),
+                None => name.to_string(),
+            };
+            crumbs.push(serde_json::json!({ "label": label, "kind": sym.map(|s| s.kind) }));
+        }
+        to_json(&crumbs)
+    }
+
+    // ----- library -----
+
+    /// `[{ id, name, kind, uses, length }]` for every symbol except the main timeline.
+    #[wasm_bindgen(js_name = libraryJson)]
+    pub fn library_json(&self) -> String {
+        let p = &self.doc.project;
+        let items: Vec<_> = p
+            .symbols
+            .iter()
+            .filter(|s| s.id != p.root)
+            .map(|s| {
+                let uses = p.symbols.iter().flat_map(|o| o.instanced_symbols()).filter(|id| *id == s.id).count();
+                serde_json::json!({ "id": s.id.0, "name": s.name, "kind": s.kind, "uses": uses, "length": s.length() })
+            })
+            .collect();
+        to_json(&items)
+    }
+
+    /// Draws a symbol's first frame fitted into the canvas (library thumbnails).
+    #[wasm_bindgen(js_name = renderSymbolPreview)]
+    pub fn render_symbol_preview(&self, ctx: &CanvasRenderingContext2d, symbol: u32, width: f64, height: f64) {
+        let p = &self.doc.project;
+        let id = SymbolId(symbol);
+        let kind = zoetrope_core::ElementKind::instance(id);
+        let Some(b) = query::content_bounds(p, &kind, &Matrix::IDENTITY, 0, 0) else { return };
+        let k = ((width - 6.0) / b.width().max(1e-6)).min((height - 6.0) / b.height().max(1e-6)).min(4.0);
+        let c = b.center();
+        let m = Matrix::translate(width / 2.0, height / 2.0) * Matrix::scale(k, k) * Matrix::translate(-c.x, -c.y);
+        let view = EditView { path: &[], root_frame: 0, symbol: id, frame: 0, matrix: m, context_alpha: 0.0 };
+        let images = self.images.borrow();
+        let mut pool = self.pool.borrow_mut();
+        let mut r = PreviewRenderer(Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps));
+        render_editing(p, &view, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None }, &mut r);
+    }
+
+    /// F8: turns elements into a symbol instance. `kind`: graphic | movieClip | button.
+    #[wasm_bindgen(js_name = convertToSymbol)]
+    pub fn convert_to_symbol(&mut self, ids_json: &str, name: &str, kind: &str) -> Result<u32, JsError> {
+        let kind: SymbolKind = parse("symbol kind", &format!("{kind:?}"))?;
+        let (instance, _) = ops::convert_to_symbol(&mut self.doc, &ids(ids_json)?, name, kind, self.frame).map_err(js_err)?;
+        Ok(instance.0)
+    }
+
+    /// `patch_json`: `{ name?, kind? }`.
+    #[wasm_bindgen(js_name = setSymbolProps)]
+    pub fn set_symbol_props(&mut self, symbol: u32, patch_json: &str) -> Result<(), JsError> {
+        #[derive(serde::Deserialize)]
+        struct Patch {
+            name: Option<String>,
+            kind: Option<SymbolKind>,
+        }
+        let patch: Patch = parse("symbol patch", patch_json)?;
+        ops::set_symbol_props(&mut self.doc, SymbolId(symbol), patch.name.as_deref(), patch.kind).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = duplicateSymbol)]
+    pub fn duplicate_symbol(&mut self, symbol: u32) -> Result<u32, JsError> {
+        ops::duplicate_symbol(&mut self.doc, SymbolId(symbol)).map(|s| s.0).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = deleteSymbol)]
+    pub fn delete_symbol(&mut self, symbol: u32) -> Result<(), JsError> {
+        ops::delete_symbol(&mut self.doc, SymbolId(symbol)).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = swapSymbol)]
+    pub fn swap_symbol(&mut self, ids_json: &str, symbol: u32) -> Result<(), JsError> {
+        ops::swap_symbol(&mut self.doc, &ids(ids_json)?, SymbolId(symbol)).map_err(js_err)
+    }
+
+    /// Drops a library symbol onto the stage at a stage point.
+    #[wasm_bindgen(js_name = placeInstance)]
+    pub fn place_instance(&mut self, layer: u32, symbol: u32, x: f64, y: f64) -> Result<u32, JsError> {
+        let at = self.local(x, y);
+        ops::place_instance(&mut self.doc, LayerId(layer), SymbolId(symbol), at, self.frame).map(|e| e.0).map_err(js_err)
+    }
+
+    // ----- preview playback (runtime clocks; main timeline only) -----
+
+    /// Starts the runtime at the current frame of the main timeline.
+    #[wasm_bindgen(js_name = playStart)]
+    pub fn play_start(&mut self) -> Result<(), JsError> {
+        if !self.levels.is_empty() {
+            return Err(JsError::new("preview plays the main timeline: leave symbol editing first"));
+        }
+        self.cancel_all();
+        self.player = Some(Player::new(&self.doc.project, self.frame));
+        Ok(())
+    }
+
+    /// Advances `ticks` frames; returns the main timeline's frame.
+    #[wasm_bindgen(js_name = playTick)]
+    pub fn play_tick(&mut self, ticks: u32) -> u32 {
+        let Some(pl) = &mut self.player else { return self.frame };
+        // A stalled tab can owe many frames; never spin for longer than ~10 s of animation.
+        for _ in 0..ticks.min(MAX_CATCH_UP_TICKS) {
+            pl.tick(&self.doc.project);
+        }
+        pl.frame
+    }
+
+    /// Feeds the pointer (stage coords; `inside` false when it left the stage).
+    /// Returns `{ events, overButton }`.
+    #[wasm_bindgen(js_name = playPointer)]
+    pub fn play_pointer(&mut self, x: f64, y: f64, inside: bool, down: bool) -> String {
+        let Some(pl) = &mut self.player else { return "null".into() };
+        let events = pl.pointer(&self.doc.project, inside.then(|| Point::new(x, y)), down);
+        serde_json::json!({ "events": events, "overButton": pl.over_button() }).to_string()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = playRender)]
+    pub fn play_render(&self, ctx: &CanvasRenderingContext2d, scale: f64, offset_x: f64, offset_y: f64, clip: bool, show_guides: bool) {
+        let Some(pl) = &self.player else { return };
+        let view = Matrix::translate(offset_x, offset_y) * Matrix::scale(scale, scale);
+        let images = self.images.borrow();
+        let mut pool = self.pool.borrow_mut();
+        let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
+        pl.render(&self.doc.project, RenderOptions { view, clip_to_stage: clip, show_guides, onion: None }, &mut r);
+    }
+
+    /// Stops the runtime; the playhead stays where playback reached.
+    #[wasm_bindgen(js_name = playStop)]
+    pub fn play_stop(&mut self) -> u32 {
+        if let Some(pl) = self.player.take() {
+            self.frame = pl.frame;
+        }
+        self.frame
+    }
+
+    #[wasm_bindgen(js_name = isPlaying)]
+    pub fn is_playing(&self) -> bool {
+        self.player.is_some()
     }
 
     // ----- timeline -----
@@ -387,7 +697,14 @@ impl Engine {
         let tool: ShapeTool = parse("tool", &format!("{tool:?}"))?;
         let mods: Modifiers = parse("modifiers", mods_json)?;
         let opts: ShapeOptions = parse("shape options", opts_json)?;
-        Ok(to_json(&shape_from_drag(tool, Point::new(x0, y0), Point::new(x1, y1), mods, &opts).map(|d| d.outline())))
+        // Preview in stage space; the created shape lives in the edited symbol's space.
+        let to_stage = self.scope().matrix;
+        let (p0, p1) = (self.local(x0, y0), self.local(x1, y1));
+        Ok(to_json(&shape_from_drag(tool, p0, p1, mods, &opts).map(|d| {
+            let mut v = d.geometry.to_vector_path();
+            v.transform(&(to_stage * Matrix::translate(d.center.x, d.center.y)));
+            v.outline(&Matrix::IDENTITY)
+        })))
     }
 
     // ----- pen tool (stage coordinates) -----
@@ -435,7 +752,8 @@ impl Engine {
     #[wasm_bindgen(js_name = penFinish)]
     pub fn pen_finish(&mut self, layer: u32, style_json: &str) -> Result<Option<u32>, JsError> {
         let style: ShapeStyle = parse("style", style_json)?;
-        let Some(path) = self.pen.take().and_then(PenSession::finish) else { return Ok(None) };
+        let Some(mut path) = self.pen.take().and_then(PenSession::finish) else { return Ok(None) };
+        path.transform(&self.scope().matrix.invert().unwrap_or(Matrix::IDENTITY));
         ops::create_path(&mut self.doc, LayerId(layer), path, &style, "Pen", self.frame).map(|e| Some(e.0)).map_err(js_err)
     }
 
@@ -449,7 +767,8 @@ impl Engine {
     /// Creates a path from freehand samples (JSON `[{x, y}, …]`, stage coords).
     #[wasm_bindgen(js_name = createFreehand)]
     pub fn create_freehand(&mut self, layer: u32, points_json: &str, smooth: bool, tolerance: f64, style_json: &str) -> Result<Option<u32>, JsError> {
-        let points: Vec<Point> = parse("points", points_json)?;
+        let inv = self.scope().matrix.invert().unwrap_or(Matrix::IDENTITY);
+        let points: Vec<Point> = parse::<Vec<Point>>("points", points_json)?.into_iter().map(|p| inv.apply(p)).collect();
         let style: ShapeStyle = parse("style", style_json)?;
         ops::create_freehand(&mut self.doc, LayerId(layer), &points, smooth, tolerance, &style, self.frame).map(|e| e.map(|e| e.0)).map_err(js_err)
     }
@@ -582,7 +901,8 @@ impl Engine {
         let mods: Modifiers = parse("modifiers", mods_json)?;
         let opts: ShapeOptions = parse("shape options", opts_json)?;
         let style: ShapeStyle = parse("style", style_json)?;
-        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, Point::new(x0, y0), Point::new(x1, y1), mods, &opts, &style, self.frame)
+        let (p0, p1) = (self.local(x0, y0), self.local(x1, y1));
+        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, p0, p1, mods, &opts, &style, self.frame)
             .map_err(js_err)?;
         Ok(id.map(|e| e.0))
     }
@@ -591,7 +911,8 @@ impl Engine {
     /// on `layer`. Call `decodeImages()` afterwards.
     #[wasm_bindgen(js_name = importImage)]
     pub fn import_image(&mut self, layer: u32, name: &str, bytes: &[u8], x: f64, y: f64) -> Result<u32, JsError> {
-        ops::import_image(&mut self.doc, LayerId(layer), name, bytes, Point::new(x, y), self.frame).map(|e| e.0).map_err(js_err)
+        let at = self.local(x, y);
+        ops::import_image(&mut self.doc, LayerId(layer), name, bytes, at, self.frame).map(|e| e.0).map_err(js_err)
     }
 
     /// Merges a JSON patch into each element (see `ops::patch_element`).
