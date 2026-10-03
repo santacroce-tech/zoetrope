@@ -19,6 +19,7 @@ pub mod outline;
 pub mod paint;
 pub mod query;
 pub mod render;
+pub mod timeline;
 pub mod vector;
 
 pub use color::{Color, ColorTransform};

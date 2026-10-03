@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const FORMAT_ID: &str = "zoetrope-project";
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// One migration step: upgrades a whole envelope from version N to N+1.
 /// It may assume `schemaVersion == N`; the runner rewrites the version field.
@@ -19,7 +19,7 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// `MIGRATIONS[i]` upgrades schema version `i + 1` to `i + 2`.
 /// Append here whenever `SCHEMA_VERSION` is bumped.
-const MIGRATIONS: &[Migration] = &[v1_to_v2];
+const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3];
 
 /// v1 → v2 (Phase 3): strokes changed from `{ width, color }` to
 /// `{ width, paint, cap, join, miterLimit, … }`. Old strokes become solid
@@ -44,6 +44,38 @@ fn v1_to_v2(mut v: Value) -> Result<Value> {
         }
     }
     walk(&mut v["project"]);
+    Ok(v)
+}
+
+/// v2 → v3 (Phase 4): content layers hold keyframes instead of a flat
+/// element list. Each v2 layer becomes a single one-frame keyframe holding
+/// its elements, so the scene is unchanged at frame 0 (its only frame).
+fn v2_to_v3(mut v: Value) -> Result<Value> {
+    fn layers(list: &mut Value) {
+        let Some(items) = list.as_array_mut() else { return };
+        for layer in items {
+            let Some(obj) = layer.as_object_mut() else { continue };
+            let folder = obj.get("kind").and_then(Value::as_str) == Some("folder");
+            let elements = obj.remove("elements").unwrap_or_else(|| Value::Array(Vec::new()));
+            if folder {
+                if let Some(children) = obj.get_mut("children") {
+                    layers(children);
+                }
+            } else {
+                let mut kf = serde_json::Map::new();
+                kf.insert("duration".into(), 1.into());
+                if elements.as_array().is_some_and(|a| !a.is_empty()) {
+                    kf.insert("elements".into(), elements);
+                }
+                obj.insert("keyframes".into(), Value::Array(vec![Value::Object(kf)]));
+            }
+        }
+    }
+    if let Some(symbols) = v["project"]["symbols"].as_array_mut() {
+        for sym in symbols {
+            layers(&mut sym["layers"]);
+        }
+    }
     Ok(v)
 }
 

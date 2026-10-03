@@ -21,7 +21,7 @@ fn main() {
             extra.push(e);
         }
         let flowers = p.symbol(root).unwrap().layers.iter().find(|l| l.name == "Flowers").unwrap().id;
-        p.layer_mut(flowers).unwrap().elements = extra;
+        p.layer_mut(flowers).unwrap().keyframes[0].elements = extra;
 
         let opts = RenderOptions::player(Matrix::IDENTITY);
         let mut rec = RecordingRenderer::default();

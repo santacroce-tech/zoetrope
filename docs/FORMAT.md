@@ -1,4 +1,4 @@
-# Project file format (`.zoe`) — schema version 2
+# Project file format (`.zoe`) — schema version 3
 
 UTF-8 JSON. Field names are camelCase. Unknown fields are ignored on read.
 Fields marked *optional* may be omitted and take the listed default; the
@@ -15,6 +15,10 @@ History:
   `join: "miter"` and `miterLimit: 10`, which are exactly the Canvas2D
   defaults v1 rendered with, so old files look identical (covered by the
   `phase1_files_still_load` test).
+* **v3** (Phase 4). Content layers hold `keyframes` instead of `elements`.
+  The `v2_to_v3` migration wraps each layer's elements into a single
+  one-frame keyframe, so v2 scenes are unchanged (their only frame). Elements
+  gain an optional `track`.
 
 ## Envelope
 
@@ -67,14 +71,55 @@ Layer lists (`Symbol.layers`, `Layer.children`) are **bottom-to-top**
 | `kind` | `"normal"` \| `"guide"` \| `"folder"` | *optional*, default `normal`. Guide layers render in the editor only, never in the player/export. |
 | `visible` | bool | *optional*, default `true`. For folders it cascades to children. |
 | `locked` | bool | *optional*, default `false`. Cascades. Locked content can't be selected or drawn into. |
-| `elements` | Element[] | normal/guide only. **Back-to-front**. *Optional*, default `[]`. |
+| `keyframes` | Keyframe[] | normal/guide layers only, at least one. See below. |
 | `children` | Layer[] | folders only. *Optional*, default `[]`. |
+
+### Keyframe & tween
+
+A content layer's keyframes are **contiguous spans starting at frame 0**:
+keyframe *i* starts at the sum of the earlier durations (starts are never
+stored, so they can't disagree). Frames past the last span show nothing on
+that layer. A symbol's length is its longest layer (≥ 1).
+
+| Keyframe field | Notes |
+|----------------|-------|
+| `duration` | frames spanned, ≥ 1 |
+| `elements` | Element[], **back-to-front**. *Optional*, default `[]` (a blank keyframe). |
+| `tween` | *optional* Tween: interpolate toward the **next** keyframe over this span |
+
+| Tween field | Notes |
+|-------------|-------|
+| `kind` | `"motion"`: transform, pivot, opacity and tint. `"shape"`: those, plus shape geometry, fill/stroke paints and stroke width/dashes. |
+| `easing` | *optional* (default linear): `{"type":"linear"}` \| `{"type":"preset","name":<preset>}` \| `{"type":"bezier","x1","y1","x2","y2"}` (CSS `cubic-bezier`; x1/x2 in 0..1) |
+| `rotate` | *optional* extra full turns added to the rotation (positive = clockwise), default 0 |
+
+Presets: `easeIn|Out|InOut` × `Quad`, `Cubic`, `Sine`, `Back`, `Bounce`,
+`Elastic` (Penner's equations), e.g. `easeInOutSine`.
+
+**Evaluation at frame *f*** (span starting at *s*, duration *d*, eased
+progress *e* = easing((*f* − *s*) / *d*)): each element of the tweened
+keyframe is paired with the element of the next keyframe that has the same
+**track**, and interpolated at *e*. At *f* = *s* + *d* the next keyframe
+itself is shown. Unpaired elements are shown unchanged. Rotation goes
+`a + (b − a + 360·rotate)·e`. Shape tweens morph geometry:
+- **Same primitive kind:** the parameters are interpolated.
+- **Otherwise:** both shapes are converted to paths and node counts are
+  equalized by splitting the longest segments. Closed subpaths are rotated
+  to the best-matching start node. If the subpath structure doesn't match,
+  the shape switches at *e* = 0.5.
+- **Paints:** interpolated per stop when the stop counts match; a solid
+  tweens against a gradient as a uniform gradient.
+
+**Nested timelines (provisional, Phase 4):** an instance shows its symbol at
+`parentFrame mod symbolLength`. Phase 5 replaces this with per-instance
+symbol clocks.
 
 ### Element
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | u32 | |
+| `track` | u32 | *optional*: tween pairing identity, default = `id`. Copies made by "insert keyframe" keep their source's track. |
 | `name` | string | *optional*, default `""` |
 | `transform` | Transform | *optional*, default identity |
 | `opacity` | number 0..1 | *optional*, default `1` (multiplies alpha) |
@@ -185,6 +230,5 @@ load → save is byte-stable.
 
 ## Planned changes
 
-Timelines and keyframes (Phase 4) change the layer structure. That will be
-schema v3, with a migration that wraps each layer's `elements` into a single
-keyframe at frame 0.
+Symbol types and per-instance clocks (Phase 5) will add fields to symbols
+and instances.

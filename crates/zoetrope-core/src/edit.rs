@@ -16,11 +16,15 @@ pub enum Edit {
     /// Replaces an element's whole value (same id, same symbol/layer slot).
     ReplaceElement { element: Element },
     SetStage(Stage),
-    InsertElement { layer: LayerId, index: usize, element: Element },
+    /// Inserts into keyframe `keyframe` (index) of `layer`.
+    InsertElement { layer: LayerId, keyframe: usize, index: usize, element: Element },
     RemoveElement { element: ElementId },
-    /// Sets the element order of a layer; `order` must be a permutation of
-    /// the layer's current element ids.
-    ReorderElements { layer: LayerId, order: Vec<ElementId> },
+    /// Sets the element order of one keyframe; `order` must be a
+    /// permutation of its current element ids.
+    ReorderElements { layer: LayerId, keyframe: usize, order: Vec<ElementId> },
+    /// Replaces a content layer's whole keyframe list (timeline structure
+    /// and tween edits). Elements may be kept (same id), dropped, or new.
+    SetKeyframes { layer: LayerId, keyframes: Vec<Keyframe> },
     /// Inserts a layer (with any contents) into `parent` (a folder) or the
     /// symbol's top level.
     InsertLayer { symbol: SymbolId, parent: Option<LayerId>, index: usize, layer: Layer },
@@ -69,7 +73,7 @@ impl Edit {
                 stage.validate()?;
                 Ok(Edit::SetStage(std::mem::replace(&mut p.stage, stage)))
             }
-            Edit::InsertElement { layer, index, element } => {
+            Edit::InsertElement { layer, keyframe, index, element } => {
                 if p.locate(element.id).is_some() {
                     return Err(Error::Invalid(format!("element {} already exists", element.id.0)));
                 }
@@ -82,34 +86,58 @@ impl Edit {
                 if l.is_folder() {
                     return Err(Error::Invalid("cannot place elements in a folder".into()));
                 }
-                if index > l.elements.len() {
+                let kf = l.keyframes.get_mut(keyframe).ok_or_else(|| Error::NotFound(format!("keyframe {keyframe}")))?;
+                if index > kf.elements.len() {
                     return Err(Error::Invalid(format!("insert index {index} out of range")));
                 }
                 let id = element.id;
-                l.elements.insert(index, element);
+                kf.elements.insert(index, element);
                 Ok(Edit::RemoveElement { element: id })
             }
             Edit::RemoveElement { element } => {
                 let loc = p.locate(element).ok_or_else(|| not_found(element))?;
-                let removed = p.layer_mut(loc.layer).expect("located").elements.remove(loc.index);
-                Ok(Edit::InsertElement { layer: loc.layer, index: loc.index, element: removed })
+                let removed = p.layer_mut(loc.layer).expect("located").keyframes[loc.keyframe].elements.remove(loc.index);
+                Ok(Edit::InsertElement { layer: loc.layer, keyframe: loc.keyframe, index: loc.index, element: removed })
             }
-            Edit::ReorderElements { layer, order } => {
+            Edit::ReorderElements { layer, keyframe, order } => {
                 let l = p.layer_mut(layer).ok_or_else(|| layer_not_found(layer))?;
-                let mut current: Vec<ElementId> = l.elements.iter().map(|e| e.id).collect();
+                let kf = l.keyframes.get_mut(keyframe).ok_or_else(|| Error::NotFound(format!("keyframe {keyframe}")))?;
+                let mut current: Vec<ElementId> = kf.elements.iter().map(|e| e.id).collect();
                 let mut wanted = order.clone();
                 current.sort();
                 wanted.sort();
                 if current != wanted {
                     return Err(Error::Invalid("reorder must be a permutation of the layer's elements".into()));
                 }
-                let old: Vec<ElementId> = l.elements.iter().map(|e| e.id).collect();
-                let mut taken = std::mem::take(&mut l.elements);
+                let old: Vec<ElementId> = kf.elements.iter().map(|e| e.id).collect();
+                let mut taken = std::mem::take(&mut kf.elements);
                 for id in &order {
                     let i = taken.iter().position(|e| e.id == *id).expect("permutation");
-                    l.elements.push(taken.swap_remove(i));
+                    kf.elements.push(taken.swap_remove(i));
                 }
-                Ok(Edit::ReorderElements { layer, order: old })
+                Ok(Edit::ReorderElements { layer, keyframe, order: old })
+            }
+            Edit::SetKeyframes { layer, keyframes } => {
+                let symbol = p.locate_layer(layer).ok_or_else(|| layer_not_found(layer))?.symbol;
+                let old = p.require_layer(layer)?;
+                if old.is_folder() {
+                    return Err(Error::Invalid("folders have no keyframes".into()));
+                }
+                let probe = Layer { keyframes: keyframes.clone(), ..Layer::new(layer, "", old.kind) };
+                check_keyframes(&probe)?;
+                let mut seen = std::collections::HashSet::new();
+                let kept: std::collections::HashSet<ElementId> = old.all_elements().map(|e| e.id).collect();
+                for e in probe.all_elements() {
+                    if !seen.insert(e.id) {
+                        return Err(Error::Invalid(format!("element {} appears twice", e.id.0)));
+                    }
+                    if !kept.contains(&e.id) && (e.id.0 >= p.next_id || p.locate(e.id).is_some()) {
+                        return Err(Error::Invalid(format!("element id {} is not fresh", e.id.0)));
+                    }
+                    p.check_element_placement(symbol, e)?;
+                }
+                let l = p.layer_mut(layer).expect("located");
+                Ok(Edit::SetKeyframes { layer, keyframes: std::mem::replace(&mut l.keyframes, keyframes) })
             }
             Edit::InsertLayer { symbol, parent, index, layer } => {
                 check_new_layer(p, symbol, &layer)?;
@@ -154,7 +182,7 @@ impl Edit {
                 let mut used = false;
                 for s in &p.symbols {
                     walk_layers(&s.layers, &mut |l| {
-                        used |= l.elements.iter().any(|e| e.kind == ElementKind::Bitmap { asset });
+                        used |= l.all_elements().any(|e| e.kind == ElementKind::Bitmap { asset });
                     });
                 }
                 if used {
@@ -175,12 +203,14 @@ fn check_new_layer(p: &Project, symbol: SymbolId, layer: &Layer) -> Result<()> {
         }
         if l.id.0 >= p.next_id || p.layer(l.id).is_some() {
             result = Err(Error::Invalid(format!("layer id {} is not fresh", l.id.0)));
-        } else if l.is_folder() && !l.elements.is_empty() {
-            result = Err(Error::Invalid("folders cannot hold elements".into()));
+        } else if l.is_folder() && !l.keyframes.is_empty() {
+            result = Err(Error::Invalid("folders cannot hold keyframes".into()));
         } else if !l.is_folder() && !l.children.is_empty() {
             result = Err(Error::Invalid("only folders can hold layers".into()));
+        } else if let Err(e) = check_keyframes(l) {
+            result = Err(e);
         }
-        for e in &l.elements {
+        for e in l.all_elements() {
             if result.is_ok() && (e.id.0 >= p.next_id || p.locate(e.id).is_some()) {
                 result = Err(Error::Invalid(format!("element id {} is not fresh", e.id.0)));
             }

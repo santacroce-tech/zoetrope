@@ -102,7 +102,7 @@ impl SnapTargets {
             if exclude.contains(&e.id) {
                 continue;
             }
-            if let Some(b) = content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0) {
+            if let Some(b) = content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0) {
                 let c = b.center();
                 t.xs.extend([b.min.x, c.x, b.max.x]);
                 t.ys.extend([b.min.y, c.y, b.max.y]);
@@ -179,13 +179,7 @@ impl TransformSession {
             return Err(Error::Invalid("nothing selected".into()));
         }
         for id in ids {
-            let loc = p.locate(*id).ok_or_else(|| Error::NotFound(format!("element {}", id.0)))?;
-            if loc.symbol != scope.symbol {
-                return Err(Error::Invalid("element is not in the edited symbol".into()));
-            }
-            if p.layer_state(loc.layer).is_some_and(|(_, locked)| locked) {
-                return Err(Error::Invalid("element is on a locked layer".into()));
-            }
+            check_editable(p, &scope, *id)?;
         }
         if mode == DragMode::Pivot && ids.len() != 1 {
             return Err(Error::Invalid("the pivot can only be moved for a single element".into()));
@@ -199,7 +193,7 @@ impl TransformSession {
         };
         let start_bounds = Rect::union_all(ids.iter().filter_map(|id| {
             let e = p.element(*id)?;
-            content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0)
+            content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0)
         }));
         let targets = SnapTargets::collect(p, &scope, ids);
         Ok(TransformSession { scope, ids: ids.to_vec(), initial, mode, frame, bbox, center, start, start_bounds, targets })
@@ -675,6 +669,8 @@ fn paint_of(s: &Shape, part: PaintPart) -> Option<&Paint> {
     }
 }
 
+/// An element can be directly manipulated if it is in the edited symbol, on
+/// an unlocked layer, and shown un-interpolated at the scope's frame.
 fn check_editable(p: &Project, scope: &Scope, id: ElementId) -> Result<()> {
     let loc = p.locate(id).ok_or_else(|| Error::NotFound(format!("element {}", id.0)))?;
     if loc.symbol != scope.symbol {
@@ -682,6 +678,13 @@ fn check_editable(p: &Project, scope: &Scope, id: ElementId) -> Result<()> {
     }
     if p.layer_state(loc.layer).is_some_and(|(_, locked)| locked) {
         return Err(Error::Invalid("element is on a locked layer".into()));
+    }
+    let layer = p.require_layer(loc.layer)?;
+    if layer.keyframe_at(scope.frame).map(|(i, _)| i) != Some(loc.keyframe) {
+        return Err(Error::Invalid("element is not on the current frame".into()));
+    }
+    if crate::timeline::is_tweened_frame(layer, scope.frame) {
+        return Err(Error::Invalid("this frame is tweened: insert a keyframe here (F6) to edit it".into()));
     }
     Ok(())
 }
@@ -894,7 +897,7 @@ mod tests {
 
     fn render(p: &Project) -> Vec<crate::render::DrawOp> {
         let mut r = RecordingRenderer::default();
-        render_frame(p, 0, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides: true }, &mut r);
+        render_frame(p, 0, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides: true, onion: None }, &mut r);
         r.ops
     }
 

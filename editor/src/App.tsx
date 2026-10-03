@@ -12,7 +12,7 @@ import {
 } from "./engine";
 import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
 import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
-import { LayersPanel } from "./components/LayersPanel";
+import { Timeline, type FrameOp, type OnionSettings } from "./components/Timeline";
 import { PropertiesPanel } from "./components/PropertiesPanel";
 import { TOOL_KEYS, ToolOptionsBar, ToolPalette } from "./components/ToolPalette";
 import { clampZoom, zoomAt, type View } from "./view";
@@ -63,6 +63,11 @@ function Editor({ engine }: { engine: Engine }) {
   });
   const [toolOptions, setToolOptions] = useState<ToolOptions>({ sides: 5, star: null, pencilSmooth: true });
   const [anchors, setAnchors] = useState<NodeRef[]>([]);
+  const [frame, setFrameState] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [loop, setLoop] = useState(true);
+  const [onion, setOnion] = useState<OnionSettings>({ enabled: false, before: 2, after: 2, alpha: 0.35 });
+  const [frameFocus, setFrameFocus] = useState<{ layer: number; frame: number } | null>(null);
   const [settings, setSettings] = useState<StageSettings>({
     showGrid: false,
     gridSize: 20,
@@ -85,6 +90,42 @@ function Editor({ engine }: { engine: Engine }) {
   const stage = useMemo<StageInfo>(() => JSON.parse(engine.stageJson()), [engine, version]);
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
+  const timelineLength = useMemo(() => engine.timelineLength(), [engine, version]);
+
+  /** Moves the playhead (the engine edits/queries at this frame). */
+  const goTo = useCallback(
+    (f: number) => {
+      const clamped = Math.max(0, Math.floor(f));
+      engine.setFrame(clamped);
+      setFrameState(clamped);
+    },
+    [engine],
+  );
+
+  // Playback: advance by wall-clock time at the stage fps.
+  useEffect(() => {
+    if (!playing) return;
+    const length = engine.timelineLength();
+    const fps = stage.fps;
+    const start = frame >= length - 1 && !loop ? 0 : frame;
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      let f = start + Math.floor(((now - t0) * fps) / 1000);
+      if (f >= length) {
+        if (!loop) {
+          goTo(length - 1);
+          setPlaying(false);
+          return;
+        }
+        f %= length;
+      }
+      goTo(f);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep selection and the active layer valid after any change (undo, locks…).
   useEffect(() => {
@@ -94,7 +135,7 @@ function Editor({ engine }: { engine: Engine }) {
       return valid.length === sel.length ? sel : valid;
     });
     setActiveLayer((l) => (l !== null && containsLayer(layers, l) ? l : firstContentLayer(layers)));
-  }, [engine, layers, version]);
+  }, [engine, layers, version, frame]);
 
   const selectedLayers = useMemo(
     () => new Set<number>(selection.map((id) => JSON.parse(engine.elementJson(id))?.layer).filter((l) => l !== undefined)),
@@ -124,6 +165,9 @@ function Editor({ engine }: { engine: Engine }) {
   );
 
   const resetDocState = () => {
+    setPlaying(false);
+    goTo(0);
+    setFrameFocus(null);
     setFilePath(null);
     setSelection([]);
     setActiveLayer(null);
@@ -205,7 +249,50 @@ function Editor({ engine }: { engine: Engine }) {
   );
 
   // Anchor selection belongs to one shape; reset it when the selection changes.
-  useEffect(() => setAnchors([]), [selection]);
+  // Selecting objects also switches the properties panel back from frame mode.
+  useEffect(() => {
+    setAnchors([]);
+    if (selection.length) setFrameFocus(null);
+  }, [selection]);
+
+  const frameOp = useCallback(
+    (op: FrameOp) => {
+      if (activeLayer === null) return setMessage({ text: "Select a layer first", error: true });
+      const ls = JSON.stringify([activeLayer]);
+      setPlaying(false);
+      run(() => {
+        switch (op) {
+          case "frame":
+            return engine.insertFrames(ls, frame, 1);
+          case "removeFrame":
+            return engine.removeFrames(ls, frame, 1);
+          case "key":
+            return engine.insertKeyframe(ls, frame, false);
+          case "blank":
+            return engine.insertKeyframe(ls, frame, true);
+          case "clear":
+            return engine.clearKeyframe(ls, frame);
+          case "noTween":
+            return engine.setTween(ls, frame, "null");
+          case "motion":
+          case "shape":
+            return engine.setTween(ls, frame, JSON.stringify({ kind: op, easing: { type: "linear" }, rotate: 0 }));
+        }
+      });
+      setFrameFocus({ layer: activeLayer, frame });
+    },
+    [engine, activeLayer, frame, run],
+  );
+
+  const findLayerNode = (nodes: LayerNode[], id: number): LayerNode | null => {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      const c = findLayerNode(n.children, id);
+      if (c) return c;
+    }
+    return null;
+  };
+  const frameTarget = frameFocus && findLayerNode(layers, frameFocus.layer);
 
   const onPicked = useCallback((picked: PickedStyle) => {
     // Like Flash: picking a fill loads the bucket; picking a stroke loads the stroke style.
@@ -245,7 +332,15 @@ function Editor({ engine }: { engine: Engine }) {
     const k = e.key.toLowerCase();
     const step = e.shiftKey ? 10 : 1;
     let handled = true;
-    if (mod && k === "z" && !e.shiftKey) undo();
+    if (e.key === "F5") frameOp(e.shiftKey ? "removeFrame" : "frame");
+    else if (e.key === "F6") frameOp(e.shiftKey ? "clear" : "key");
+    else if (e.key === "F7") frameOp("blank");
+    else if (!mod && e.key === "Enter") setPlaying((p) => !p);
+    else if (!mod && e.key === ",") (setPlaying(false), goTo(frame - 1));
+    else if (!mod && e.key === ".") (setPlaying(false), goTo(frame + 1));
+    else if (!mod && e.key === "Home") (setPlaying(false), goTo(0));
+    else if (!mod && e.key === "End") (setPlaying(false), goTo(timelineLength - 1));
+    else if (mod && k === "z" && !e.shiftKey) undo();
     else if (mod && ((k === "z" && e.shiftKey) || k === "y")) redo();
     else if (mod && k === "s") save(e.shiftKey);
     else if (mod && k === "o") guardUnsaved("Open", open);
@@ -363,6 +458,8 @@ function Editor({ engine }: { engine: Engine }) {
           stage={stage}
           selection={selection}
           onSelect={setSelection}
+          frame={frame}
+          onion={onion.enabled && !playing ? onion : null}
           anchors={anchors}
           onAnchors={setAnchors}
           toolOptions={toolOptions}
@@ -384,28 +481,48 @@ function Editor({ engine }: { engine: Engine }) {
           onDropFiles={onDropFiles}
         />
         <aside className="side">
-          <div className="side-top">
-            <PropertiesPanel engine={engine} version={version} selection={selection} stage={stage} layers={layers} run={run} />
-          </div>
-          <div className="side-bottom">
-            <LayersPanel
-              layers={layers}
-              activeLayer={activeLayer}
-              selectedLayers={selectedLayers}
-              onActivate={setActiveLayer}
-              onAdd={(kind) =>
-                run(() => {
-                  const id = engine.addLayer(activeLayer ?? undefined, kind);
-                  if (kind !== "folder") setActiveLayer(id);
-                })
-              }
-              onDelete={(id) => run(() => engine.deleteLayer(id))}
-              onPatch={(id, patch) => run(() => engine.setLayerProps(id, JSON.stringify(patch)))}
-              onMove={(id, parent, index) => run(() => engine.moveLayer(id, parent ?? undefined, index))}
-            />
-          </div>
+          <PropertiesPanel
+            engine={engine}
+            version={version}
+            selection={selection}
+            stage={stage}
+            layers={layers}
+            frameTarget={frameTarget ? { layer: frameTarget, frame: frameFocus!.frame } : null}
+            run={run}
+          />
         </aside>
       </main>
+
+      <Timeline
+        layers={layers}
+        length={timelineLength}
+        frame={frame}
+        onFrame={goTo}
+        playing={playing}
+        onPlaying={setPlaying}
+        loop={loop}
+        onLoop={setLoop}
+        onion={onion}
+        onOnion={setOnion}
+        activeLayer={activeLayer}
+        onActivate={setActiveLayer}
+        selectedLayers={selectedLayers}
+        focus={frameFocus}
+        onFocus={(layer, f) => {
+          setFrameFocus({ layer, frame: f });
+          setSelection([]);
+        }}
+        onFrameOp={frameOp}
+        onAddLayer={(kind) =>
+          run(() => {
+            const id = engine.addLayer(activeLayer ?? undefined, kind);
+            if (kind !== "folder") setActiveLayer(id);
+          })
+        }
+        onDeleteLayer={(id) => run(() => engine.deleteLayer(id))}
+        onPatchLayer={(id, patch) => run(() => engine.setLayerProps(id, JSON.stringify(patch)))}
+        onMoveLayer={(id, parent, index) => run(() => engine.moveLayer(id, parent ?? undefined, index))}
+      />
 
       <footer className="status">
         <span>
@@ -416,6 +533,9 @@ function Editor({ engine }: { engine: Engine }) {
           {stage.width}×{stage.height} @ {stage.fps}fps
         </span>
         <span className="coords">{cursor ? `x ${cursor.x.toFixed(1)}  y ${cursor.y.toFixed(1)}` : ""}</span>
+        <span>
+          frame {frame + 1}/{timelineLength}
+        </span>
         <span>{selection.length ? `${selection.length} selected` : ""}</span>
         <span className={message?.error ? "msg error" : "msg"}>{message?.text}</span>
         <span className="right">
