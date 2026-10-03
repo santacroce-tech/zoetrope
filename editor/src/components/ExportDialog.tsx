@@ -1,3 +1,4 @@
+import { useEscape } from "./useEscape";
 import { useState } from "react";
 import type { Engine } from "../engine";
 import { buildExport, embedSnippet, totalSize, type PublishSettings, type ScaleMode } from "../export";
@@ -24,6 +25,7 @@ const SCALE_HELP: Record<ScaleMode, string> = {
 
 /** Export settings (saved with the project), embed snippet, and the export itself. */
 export function ExportDialog({ engine, fallbackTitle, onClose, onSettings, onMessage }: Props) {
+  useEscape(onClose);
   const [s, setS] = useState<PublishSettings>(() => ({ ...DEFAULTS, ...JSON.parse(engine.publishJson()) }));
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);

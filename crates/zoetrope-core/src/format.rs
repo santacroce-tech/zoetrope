@@ -52,9 +52,13 @@ fn v1_to_v2(mut v: Value) -> Result<Value> {
 /// its elements, so the scene is unchanged at frame 0 (its only frame).
 fn v2_to_v3(mut v: Value) -> Result<Value> {
     fn layers(list: &mut Value) {
-        let Some(items) = list.as_array_mut() else { return };
+        let Some(items) = list.as_array_mut() else {
+            return;
+        };
         for layer in items {
-            let Some(obj) = layer.as_object_mut() else { continue };
+            let Some(obj) = layer.as_object_mut() else {
+                continue;
+            };
             let folder = obj.get("kind").and_then(Value::as_str) == Some("folder");
             let elements = obj.remove("elements").unwrap_or_else(|| Value::Array(Vec::new()));
             if folder {
@@ -124,17 +128,13 @@ pub fn migrate(mut value: Value, steps: &[Migration], target: u32) -> Result<Val
     if value.get("format").and_then(Value::as_str) != Some(FORMAT_ID) {
         return Err(Error::Format(format!("missing or wrong \"format\" (expected {FORMAT_ID:?})")));
     }
-    let found = value
-        .get("schemaVersion")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| Error::Format("missing \"schemaVersion\"".into()))?;
+    let found =
+        value.get("schemaVersion").and_then(Value::as_u64).ok_or_else(|| Error::Format("missing \"schemaVersion\"".into()))?;
     if found == 0 || found > target as u64 {
         return Err(Error::UnsupportedVersion { found, supported: target });
     }
     for v in found as u32..target {
-        let step = steps
-            .get(v as usize - 1)
-            .ok_or_else(|| Error::Format(format!("no migration from schema {v}")))?;
+        let step = steps.get(v as usize - 1).ok_or_else(|| Error::Format(format!("no migration from schema {v}")))?;
         value = step(value)?;
         value["schemaVersion"] = Value::from(v + 1);
     }
@@ -189,13 +189,15 @@ pub fn load_pack(bytes: &[u8]) -> Result<Project> {
     let header = bytes.get(12..12 + n).ok_or_else(|| bad("truncated header"))?;
     let body = &bytes[12 + n..];
     let mut value: Value = serde_json::from_slice(header)?;
-    let blobs: Vec<(u32, usize, usize)> = serde_json::from_value(value.as_object_mut().and_then(|o| o.remove("blobs")).unwrap_or(Value::Array(vec![])))
-        .map_err(|e| bad(&format!("blob table: {e}")))?;
+    let blobs: Vec<(u32, usize, usize)> =
+        serde_json::from_value(value.as_object_mut().and_then(|o| o.remove("blobs")).unwrap_or(Value::Array(vec![])))
+            .map_err(|e| bad(&format!("blob table: {e}")))?;
     let value = migrate(value, MIGRATIONS, SCHEMA_VERSION)?;
     let mut env: Envelope<Project> = serde_json::from_value(value)?;
     for (id, offset, len) in blobs {
         let data = offset.checked_add(len).and_then(|end| body.get(offset..end)).ok_or_else(|| bad("blob out of range"))?;
-        let asset = env.project.assets.iter_mut().find(|a| a.id.0 == id).ok_or_else(|| bad(&format!("blob for unknown asset {id}")))?;
+        let asset =
+            env.project.assets.iter_mut().find(|a| a.id.0 == id).ok_or_else(|| bad(&format!("blob for unknown asset {id}")))?;
         *asset.kind.data_mut() = crate::asset::Bytes(std::sync::Arc::from(data));
     }
     env.project.validate()?;

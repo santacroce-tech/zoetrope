@@ -53,14 +53,7 @@ impl Matrix {
 
     /// Skew in degrees. `skew_x` shears x by y, `skew_y` shears y by x.
     pub fn skew(skew_x: f64, skew_y: f64) -> Matrix {
-        Matrix {
-            a: 1.0,
-            b: skew_y.to_radians().tan(),
-            c: skew_x.to_radians().tan(),
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-        }
+        Matrix { a: 1.0, b: skew_y.to_radians().tan(), c: skew_x.to_radians().tan(), d: 1.0, e: 0.0, f: 0.0 }
     }
 
     /// The matrix without its translation.
@@ -93,9 +86,7 @@ impl Matrix {
     }
 
     pub fn approx_eq(&self, o: &Matrix, eps: f64) -> bool {
-        [self.a - o.a, self.b - o.b, self.c - o.c, self.d - o.d, self.e - o.e, self.f - o.f]
-            .iter()
-            .all(|d| d.abs() <= eps)
+        [self.a - o.a, self.b - o.b, self.c - o.c, self.d - o.d, self.e - o.e, self.f - o.f].iter().all(|d| d.abs() <= eps)
     }
 }
 

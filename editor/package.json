@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "tauri": "tauri",
-    "player": "vite build --config vite.player.config.ts --logLevel warn"
+    "player": "vite build --config vite.player.config.ts --logLevel warn",
+    "test": "npm run test:build && node --test \"tests/dist/*.test.mjs\"",
+    "test:build": "esbuild tests/*.test.ts --bundle --platform=node --format=esm --target=node20 --outdir=tests/dist --out-extension:.js=.mjs --log-level=warning"
   },
   "dependencies": {
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
@@ -24,6 +26,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
     "typescript": "^5",
-    "vite": "^7"
+    "vite": "^7",
+    "esbuild": "0.28.2"
   }
 }

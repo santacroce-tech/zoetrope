@@ -1,7 +1,8 @@
 // Plays what the core's runtime says should be heard. The core decides
 // *what* plays *when* (stream positions, event triggers); this module only
-// decodes and schedules it with WebAudio. Shared by the editor preview and,
-// later, the exported player.
+// decodes and schedules it with WebAudio. Shared by the editor preview and
+// the exported player. Where WebAudio doesn't exist (tests under Node, very
+// old browsers) it plays nothing and everything else works.
 import type { Engine, SoundCue } from "../engine";
 
 /** Restart a stream if it drifts further than this from the timeline (seconds). */
@@ -23,14 +24,14 @@ export async function probeAudio(bytes: Uint8Array): Promise<number> {
 }
 
 export class AudioEngine {
-  private ctx: AudioContext;
+  private ctx: AudioContext | null;
   private buffers = new Map<number, AudioBuffer>();
   private pending = new Map<number, Promise<void>>();
   private streams = new Map<string, Playing>();
   private oneShots = new Set<AudioBufferSourceNode>();
 
   constructor(private engine: Engine) {
-    shared ??= new AudioContext();
+    if (typeof AudioContext !== "undefined") shared ??= new AudioContext();
     this.ctx = shared;
   }
 
@@ -43,16 +44,17 @@ export class AudioEngine {
 
   /** Browsers start audio suspended until a user gesture; call from input handlers. */
   async resume(): Promise<void> {
-    if (this.ctx.state === "suspended") await this.ctx.resume();
+    if (this.ctx?.state === "suspended") await this.ctx.resume();
   }
 
   private load(id: number): Promise<void> {
-    if (this.buffers.has(id)) return Promise.resolve();
+    const ctx = this.ctx;
+    if (!ctx || this.buffers.has(id)) return Promise.resolve();
     let p = this.pending.get(id);
     if (!p) {
       const bytes = this.engine.assetBytes(id);
       p = bytes
-        ? this.ctx
+        ? ctx
             .decodeAudioData(bytes.slice().buffer)
             .then((b) => void this.buffers.set(id, b))
             .catch((e) => console.warn(`could not decode audio asset ${id}`, e))
@@ -67,7 +69,7 @@ export class AudioEngine {
     // Until the page gets a user gesture the browser keeps audio suspended
     // (its clock is frozen): schedule nothing. Streams pick up at the right
     // position on the first sync after it resumes; events meanwhile are lost.
-    if (this.ctx.state !== "running") return;
+    if (this.ctx?.state !== "running") return;
     const now = this.ctx.currentTime;
     const wanted = new Set<string>();
     for (const cue of state.streams) {
@@ -96,11 +98,12 @@ export class AudioEngine {
   }
 
   private start(buffer: AudioBuffer, volume: number, offset: number, loops: number): AudioBufferSourceNode {
-    const source = this.ctx.createBufferSource();
+    const ctx = this.ctx!;
+    const source = ctx.createBufferSource();
     source.buffer = buffer;
-    const gain = this.ctx.createGain();
+    const gain = ctx.createGain();
     gain.gain.value = volume;
-    source.connect(gain).connect(this.ctx.destination);
+    source.connect(gain).connect(ctx.destination);
     if (loops > 0) {
       source.loop = true;
       source.start(0, offset, buffer.duration * (loops + 1) - offset);

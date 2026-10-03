@@ -13,10 +13,10 @@ use crate::geom::Rect;
 use crate::history::Document;
 use crate::interact::{shape_from_drag, Modifiers, PaintPart, ShapeOptions, ShapeTool};
 use crate::math::Matrix;
-use crate::vector::freehand;
 use crate::math::Point;
 use crate::model::*;
 use crate::query::element_bounds;
+use crate::vector::freehand;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -96,8 +96,24 @@ pub fn duplicate_element(doc: &mut Document, id: ElementId, dx: f64, dy: f64) ->
 
 /// Keys of an element's JSON form that `patch_element` may change.
 const PATCHABLE: &[&str] = &[
-    "name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke", "fillRule", "firstFrame", "loopMode", "text", "font",
-    "size", "align", "letterSpacing", "lineHeight", "width",
+    "name",
+    "transform",
+    "opacity",
+    "blend",
+    "tint",
+    "geometry",
+    "fill",
+    "stroke",
+    "fillRule",
+    "firstFrame",
+    "loopMode",
+    "text",
+    "font",
+    "size",
+    "align",
+    "letterSpacing",
+    "lineHeight",
+    "width",
 ];
 
 /// Keys that only apply to text elements.
@@ -271,7 +287,9 @@ pub fn create_shape(
     frame: u32,
 ) -> Result<Option<ElementId>> {
     check_target_layer(&doc.project, layer)?;
-    let Some(drag) = shape_from_drag(tool, p0, p1, mods, opts) else { return Ok(None) };
+    let Some(drag) = shape_from_drag(tool, p0, p1, mods, opts) else {
+        return Ok(None);
+    };
     let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Shape(style.make_shape(drag.geometry)));
     el.transform = Transform::at(drag.center.x, drag.center.y);
     let id = el.id;
@@ -316,7 +334,14 @@ fn place_on_top(p: &Project, layer: LayerId, frame: u32, elements: Vec<Element>)
 /// Creates a path element from a path in stage coordinates (pen/pencil).
 /// The element is positioned at the path's bounds center, which becomes its
 /// pivot.
-pub fn create_path(doc: &mut Document, layer: LayerId, mut path: VectorPath, style: &ShapeStyle, label: &str, frame: u32) -> Result<ElementId> {
+pub fn create_path(
+    doc: &mut Document,
+    layer: LayerId,
+    mut path: VectorPath,
+    style: &ShapeStyle,
+    label: &str,
+    frame: u32,
+) -> Result<ElementId> {
     check_target_layer(&doc.project, layer)?;
     path.validate()?;
     let c = path.to_path().bounds(&Matrix::IDENTITY).ok_or_else(|| Error::Invalid("empty path".into()))?.center();
@@ -342,7 +367,9 @@ pub fn create_freehand(
     frame: u32,
 ) -> Result<Option<ElementId>> {
     check_target_layer(&doc.project, layer)?;
-    let Some(path) = freehand(points, tolerance, smooth, tolerance * 4.0) else { return Ok(None) };
+    let Some(path) = freehand(points, tolerance, smooth, tolerance * 4.0) else {
+        return Ok(None);
+    };
     create_path(doc, layer, path, style, "Pencil", frame).map(Some)
 }
 
@@ -413,11 +440,7 @@ pub struct PickedStyle {
 
 pub fn pick_style(p: &Project, scope: &crate::query::Scope, pt: Point, tolerance: f64) -> Option<PickedStyle> {
     let (shape, part) = crate::query::pick_shape(p, scope, pt, tolerance)?;
-    Some(PickedStyle {
-        part,
-        fill: shape.fill.as_ref().map(Paint::style),
-        stroke: shape.stroke.as_ref().map(StrokeStyle::of),
-    })
+    Some(PickedStyle { part, fill: shape.fill.as_ref().map(Paint::style), stroke: shape.stroke.as_ref().map(StrokeStyle::of) })
 }
 
 /// Sets the fill or stroke paint of shapes from a geometry-free style
@@ -585,8 +608,7 @@ pub fn distribute(doc: &mut Document, ids: &[ElementId], mode: Distribute, to_st
         }
         Distribute::SpaceX | Distribute::SpaceY => {
             let total: f64 = items.iter().map(|(_, b)| hi(b) - lo(b)).sum();
-            let (start, end) =
-                if to_stage { (0.0, stage_extent) } else { (lo(&items[0].1), hi(&items[n - 1].1)) };
+            let (start, end) = if to_stage { (0.0, stage_extent) } else { (lo(&items[0].1), hi(&items[n - 1].1)) };
             let gap = (end - start - total) / (n - 1) as f64;
             let mut cursor = start;
             for (_, b) in &items {
@@ -837,7 +859,9 @@ pub fn remove_frames(doc: &mut Document, layers: &[LayerId], frame: u32, count: 
         let mut kfs = l.keyframes.clone();
         for _ in 0..count.max(1) {
             let probe = Layer { keyframes: kfs.clone(), ..l.clone() };
-            let Some((i, _)) = probe.keyframe_at(frame) else { break };
+            let Some((i, _)) = probe.keyframe_at(frame) else {
+                break;
+            };
             kfs[i].duration -= 1;
             if kfs[i].duration == 0 {
                 kfs.remove(i);
@@ -914,7 +938,9 @@ fn insert_blank_after(l: &Layer, frame: u32) -> Result<Option<Vec<Keyframe>>> {
 /// previous keyframe and its contents are dropped.
 pub fn clear_keyframe(doc: &mut Document, layers: &[LayerId], frame: u32) -> Result<()> {
     edit_timeline(doc, layers, "Clear Keyframe", |_, l| {
-        let Some((i, start)) = l.keyframe_at(frame) else { return Ok(None) };
+        let Some((i, start)) = l.keyframe_at(frame) else {
+            return Ok(None);
+        };
         if start != frame {
             return Err(Error::Invalid("that frame is not a keyframe".into()));
         }
@@ -940,7 +966,9 @@ pub fn set_tween(doc: &mut Document, layers: &[LayerId], frame: u32, tween: Opti
         Some(Tween { kind: TweenKind::Shape, .. }) => "Shape Tween",
     };
     edit_timeline(doc, layers, label, |_, l| {
-        let Some((i, _)) = l.keyframe_at(frame) else { return Ok(None) };
+        let Some((i, _)) = l.keyframe_at(frame) else {
+            return Ok(None);
+        };
         if tween.is_some() && i + 1 >= l.keyframes.len() {
             return Err(Error::Invalid("insert a keyframe later on this layer to tween toward (F6)".into()));
         }
@@ -1013,13 +1041,21 @@ pub fn convert_to_symbol(
     let mut edits = vec![Edit::InsertSymbol { index: doc.project.symbols.len(), symbol }];
     // Remove back-to-front from the end so indices stay valid, then insert.
     for l in items.iter().rev() {
-        edits.push(Edit::RemoveElement { element: doc.project.layer(l.layer).unwrap().keyframes[l.keyframe].elements[l.index].id });
+        edits.push(Edit::RemoveElement {
+            element: doc.project.layer(l.layer).unwrap().keyframes[l.keyframe].elements[l.index].id,
+        });
     }
     for (i, e) in moved.into_iter().enumerate() {
         edits.push(Edit::InsertElement { layer: layer_id, keyframe: 0, index: i, element: e });
     }
-    let removed_before_top = items.iter().filter(|l| l.layer == top.layer && l.keyframe == top.keyframe && l.index < top.index).count();
-    edits.push(Edit::InsertElement { layer: top.layer, keyframe: top.keyframe, index: top.index - removed_before_top, element: instance });
+    let removed_before_top =
+        items.iter().filter(|l| l.layer == top.layer && l.keyframe == top.keyframe && l.index < top.index).count();
+    edits.push(Edit::InsertElement {
+        layer: top.layer,
+        keyframe: top.keyframe,
+        index: top.index - removed_before_top,
+        element: instance,
+    });
     doc.execute("Convert to Symbol", edits)?;
     Ok((instance_id, symbol_id))
 }
@@ -1133,12 +1169,27 @@ pub struct TextStyle {
 
 impl Default for TextStyle {
     fn default() -> Self {
-        TextStyle { font: None, size: 32.0, color: Color::BLACK, align: Default::default(), letter_spacing: 0.0, line_height: 1.25 }
+        TextStyle {
+            font: None,
+            size: 32.0,
+            color: Color::BLACK,
+            align: Default::default(),
+            letter_spacing: 0.0,
+            line_height: 1.25,
+        }
     }
 }
 
 /// Creates a text element whose box's top-left is at `at` (symbol space).
-pub fn create_text(doc: &mut Document, layer: LayerId, at: Point, text: &str, style: &TextStyle, width: Option<f64>, frame: u32) -> Result<ElementId> {
+pub fn create_text(
+    doc: &mut Document,
+    layer: LayerId,
+    at: Point,
+    text: &str,
+    style: &TextStyle,
+    width: Option<f64>,
+    frame: u32,
+) -> Result<ElementId> {
     check_target_layer(&doc.project, layer)?;
     let mut edits = Vec::new();
     let font = match style.font {
@@ -1189,12 +1240,14 @@ pub fn import_font(doc: &mut Document, name: &str, data: &[u8]) -> Result<AssetI
 /// Embeds an audio clip. `duration` (seconds) comes from the platform's
 /// decoder, which also proved the file playable.
 pub fn import_audio(doc: &mut Document, name: &str, data: &[u8], duration: f64) -> Result<AssetId> {
-    let mime = crate::asset::sniff_audio(data).ok_or_else(|| Error::Invalid("unsupported audio file (use MP3, WAV, M4A/AAC, Ogg or FLAC)".into()))?;
+    let mime = crate::asset::sniff_audio(data)
+        .ok_or_else(|| Error::Invalid("unsupported audio file (use MP3, WAV, M4A/AAC, Ogg or FLAC)".into()))?;
     if !(duration.is_finite() && duration > 0.0) {
         return Err(Error::Invalid("audio duration must be positive".into()));
     }
     let id = AssetId(doc.project.alloc_id());
-    let asset = Asset { id, name: name.to_string(), kind: AssetKind::Audio { mime: mime.into(), duration, data: Bytes(data.into()) } };
+    let asset =
+        Asset { id, name: name.to_string(), kind: AssetKind::Audio { mime: mime.into(), duration, data: Bytes(data.into()) } };
     doc.execute("Import Audio", vec![Edit::InsertAsset { index: doc.project.assets.len(), asset }])?;
     Ok(id)
 }
@@ -1209,7 +1262,9 @@ fn non_blank(s: Option<&str>) -> Option<String> {
 pub fn set_frame_script(doc: &mut Document, layers: &[LayerId], frame: u32, script: Option<&str>) -> Result<()> {
     let script = non_blank(script);
     edit_timeline(doc, layers, "Frame Script", |_, l| {
-        let Some((i, _)) = l.keyframe_at(frame) else { return Err(Error::Invalid("no frame there: insert one first (F5)".into())) };
+        let Some((i, _)) = l.keyframe_at(frame) else {
+            return Err(Error::Invalid("no frame there: insert one first (F5)".into()));
+        };
         let mut kfs = l.keyframes.clone();
         kfs[i].script = script.clone();
         Ok(Some(kfs))
@@ -1220,7 +1275,9 @@ pub fn set_frame_script(doc: &mut Document, layers: &[LayerId], frame: u32, scri
 pub fn set_frame_label(doc: &mut Document, layers: &[LayerId], frame: u32, label: Option<&str>) -> Result<()> {
     let label = non_blank(label.map(str::trim));
     edit_timeline(doc, layers, "Frame Label", |_, l| {
-        let Some((i, _)) = l.keyframe_at(frame) else { return Err(Error::Invalid("no frame there: insert one first (F5)".into())) };
+        let Some((i, _)) = l.keyframe_at(frame) else {
+            return Err(Error::Invalid("no frame there: insert one first (F5)".into()));
+        };
         let mut kfs = l.keyframes.clone();
         kfs[i].label = label.clone();
         Ok(Some(kfs))
@@ -1252,7 +1309,9 @@ pub fn set_sound(doc: &mut Document, layers: &[LayerId], frame: u32, sound: Opti
     }
     let label = if sound.is_some() { "Sound" } else { "Remove Sound" };
     edit_timeline(doc, layers, label, |_, l| {
-        let Some((i, _)) = l.keyframe_at(frame) else { return Err(Error::Invalid("no frame there: insert one first (F5)".into())) };
+        let Some((i, _)) = l.keyframe_at(frame) else {
+            return Err(Error::Invalid("no frame there: insert one first (F5)".into()));
+        };
         let mut kfs = l.keyframes.clone();
         kfs[i].sound = sound.clone();
         Ok(Some(kfs))

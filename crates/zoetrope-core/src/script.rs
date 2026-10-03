@@ -20,17 +20,37 @@ use serde_json::{json, Value};
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Call {
     /// `{ frame, length, playing }` of the root or a movie clip, else `null`.
-    Timeline { path: InstancePath },
-    Play { path: InstancePath },
-    Stop { path: InstancePath },
-    Goto { path: InstancePath, frame: FrameTarget, play: bool },
+    Timeline {
+        path: InstancePath,
+    },
+    Play {
+        path: InstancePath,
+    },
+    Stop {
+        path: InstancePath,
+    },
+    Goto {
+        path: InstancePath,
+        frame: FrameTarget,
+        play: bool,
+    },
     /// The object's properties (see `properties`), or `null` if it's gone.
-    Get { path: InstancePath },
-    Set { path: InstancePath, props: Override },
+    Get {
+        path: InstancePath,
+    },
+    Set {
+        path: InstancePath,
+        props: Override,
+    },
     /// Path of the topmost child with that instance name, or `null`.
-    Child { path: InstancePath, name: String },
+    Child {
+        path: InstancePath,
+        name: String,
+    },
     /// `[{ name, path }]` of the named children, in render order.
-    Children { path: InstancePath },
+    Children {
+        path: InstancePath,
+    },
     HitTestPoint {
         path: InstancePath,
         x: f64,
@@ -38,9 +58,14 @@ pub enum Call {
         #[serde(default)]
         shape: bool,
     },
-    HitTestObject { path: InstancePath, other: InstancePath },
+    HitTestObject {
+        path: InstancePath,
+        other: InstancePath,
+    },
     /// Stage-space bounds `{ x, y, width, height }`, or `null`.
-    Bounds { path: InstancePath },
+    Bounds {
+        path: InstancePath,
+    },
 }
 
 /// Performs one call.
@@ -65,9 +90,9 @@ pub fn call(p: &Project, player: &mut Player, c: Call) -> Result<Value> {
             Value::Null
         }
         Call::Child { path, name } => json!(player.child_named(p, &path, &name)),
-        Call::Children { path } => {
-            Value::Array(player.named_children(p, &path).into_iter().map(|(name, path)| json!({ "name": name, "path": path })).collect())
-        }
+        Call::Children { path } => Value::Array(
+            player.named_children(p, &path).into_iter().map(|(name, path)| json!({ "name": name, "path": path })).collect(),
+        ),
         Call::HitTestPoint { path, x, y, shape } => {
             if !(x.is_finite() && y.is_finite()) {
                 return Err(Error::Invalid("hitTestPoint needs finite coordinates".into()));
@@ -76,7 +101,9 @@ pub fn call(p: &Project, player: &mut Player, c: Call) -> Result<Value> {
         }
         Call::HitTestObject { path, other } => json!(player.hit_test_object(p, &path, &other)),
         Call::Bounds { path } => match player.bounds(p, &path) {
-            Some(b) => json!({ "x": b.min.x, "y": b.min.y, "width": b.width(), "height": b.height() }),
+            Some(b) => {
+                json!({ "x": b.min.x, "y": b.min.y, "width": b.width(), "height": b.height() })
+            }
             None => Value::Null,
         },
     })
@@ -88,7 +115,9 @@ fn properties(p: &Project, player: &Player, path: &[(u32, u32)]) -> Value {
     if path.is_empty() {
         return json!({ "kind": "root", "name": "root", "timeline": player.timeline(p, path) });
     }
-    let Some(r) = player.resolve(p, path) else { return Value::Null };
+    let Some(r) = player.resolve(p, path) else {
+        return Value::Null;
+    };
     let e = &r.element;
     let t = &e.transform;
     let mut v = json!({

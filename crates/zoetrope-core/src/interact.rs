@@ -50,10 +50,14 @@ impl Handle {
 #[serde(tag = "mode", rename_all = "camelCase")]
 pub enum DragMode {
     Move,
-    Scale { handle: Handle },
+    Scale {
+        handle: Handle,
+    },
     Rotate,
     /// `handle` must be an edge (N/S shear horizontally, E/W vertically).
-    Skew { handle: Handle },
+    Skew {
+        handle: Handle,
+    },
     /// Moves a single element's pivot without moving the element.
     Pivot,
 }
@@ -185,8 +189,7 @@ impl TransformSession {
             return Err(Error::Invalid("the pivot can only be moved for a single element".into()));
         }
         let initial: Vec<Transform> = ids.iter().map(|id| p.element(*id).unwrap().transform).collect();
-        let (frame, bbox) = selection_frame(p, &scope, ids)
-            .unwrap_or((Matrix::IDENTITY, Rect { min: start, max: start }));
+        let (frame, bbox) = selection_frame(p, &scope, ids).unwrap_or((Matrix::IDENTITY, Rect { min: start, max: start }));
         let center = match ids {
             [_] => scope.matrix.apply(Point::new(initial[0].x, initial[0].y)),
             _ => frame.apply(bbox.center()),
@@ -219,7 +222,9 @@ impl TransformSession {
     pub fn commit(self, doc: &mut Document) -> Result<()> {
         let mut edits = Vec::new();
         for (id, t0) in self.ids.iter().zip(&self.initial) {
-            let Some(e) = doc.project.element_mut(*id) else { continue };
+            let Some(e) = doc.project.element_mut(*id) else {
+                continue;
+            };
             let t1 = std::mem::replace(&mut e.transform, *t0);
             if t1 != *t0 {
                 edits.push(Edit::SetTransform { element: *id, transform: t1 });
@@ -333,10 +338,7 @@ impl TransformSession {
         let anchor = if mods.alt {
             b.center()
         } else {
-            Point::new(
-                if sx > 0 { b.min.x } else { b.max.x },
-                if sy > 0 { b.min.y } else { b.max.y },
-            )
+            Point::new(if sx > 0 { b.min.x } else { b.max.x }, if sy > 0 { b.min.y } else { b.max.y })
         };
         let factor = |side: i8, from: f64, to: f64, a: f64| -> f64 {
             if side == 0 || (from - a).abs() < 1e-9 {
@@ -363,14 +365,26 @@ impl TransformSession {
         let b = self.bbox;
         let c = b.center();
         let (sx, sy) = handle.sides();
-        
+
         if sy != 0 {
-            let ay = if mods.alt { c.y } else if sy > 0 { b.min.y } else { b.max.y };
+            let ay = if mods.alt {
+                c.y
+            } else if sy > 0 {
+                b.min.y
+            } else {
+                b.max.y
+            };
             let span = p0.y - ay;
             let k = if span.abs() < 1e-9 { 0.0 } else { (p.x - p0.x) / span };
             Matrix::translate(0.0, ay) * Matrix { a: 1.0, b: 0.0, c: k, d: 1.0, e: 0.0, f: 0.0 } * Matrix::translate(0.0, -ay)
         } else {
-            let ax = if mods.alt { c.x } else if sx > 0 { b.min.x } else { b.max.x };
+            let ax = if mods.alt {
+                c.x
+            } else if sx > 0 {
+                b.min.x
+            } else {
+                b.max.x
+            };
             let span = p0.x - ax;
             let k = if span.abs() < 1e-9 { 0.0 } else { (p.y - p0.y) / span };
             Matrix::translate(ax, 0.0) * Matrix { a: 1.0, b: k, c: 0.0, d: 1.0, e: 0.0, f: 0.0 } * Matrix::translate(-ax, 0.0)
@@ -444,11 +458,8 @@ pub fn shape_from_drag(tool: ShapeTool, p0: Point, p1: Point, mods: Modifiers, o
             if dx.hypot(dy) < 1.0 {
                 return None;
             }
-            let (center, full) = if mods.alt {
-                (p0, (2.0 * dx, 2.0 * dy))
-            } else {
-                (Point::new(p0.x + dx / 2.0, p0.y + dy / 2.0), (dx, dy))
-            };
+            let (center, full) =
+                if mods.alt { (p0, (2.0 * dx, 2.0 * dy)) } else { (Point::new(p0.x + dx / 2.0, p0.y + dy / 2.0), (dx, dy)) };
             Some(ShapeDrag { geometry: Geometry::Line { dx: full.0, dy: full.1 }, center })
         }
         ShapeTool::Rect | ShapeTool::Ellipse => {
@@ -546,7 +557,9 @@ impl PenSession {
             return;
         }
         let idx = if self.closing { 0 } else { self.nodes.len() - 1 };
-        let Some(n) = self.nodes.get_mut(idx) else { return };
+        let Some(n) = self.nodes.get_mut(idx) else {
+            return;
+        };
         let a = n.point();
         if (p.x - a.x).hypot(p.y - a.y) < 0.5 {
             return;
@@ -769,7 +782,9 @@ impl EditSession {
     }
 
     pub fn commit(self, doc: &mut Document) -> Result<()> {
-        let Some(e) = doc.project.element_mut(self.id) else { return Ok(()) };
+        let Some(e) = doc.project.element_mut(self.id) else {
+            return Ok(());
+        };
         let edited = std::mem::replace(e, self.initial.clone());
         if edited == self.initial {
             return Ok(());
@@ -815,7 +830,9 @@ pub struct PathInfo {
 /// What the subselection tool draws for a shape.
 pub fn path_info(p: &Project, scope: &Scope, id: ElementId) -> Option<PathInfo> {
     let e = p.element(id)?;
-    let ElementKind::Shape(s) = &e.kind else { return None };
+    let ElementKind::Shape(s) = &e.kind else {
+        return None;
+    };
     let m = scope.matrix * e.transform.matrix();
     let v = s.geometry.to_vector_path();
     let subpaths = v
@@ -826,7 +843,13 @@ pub fn path_info(p: &Project, scope: &Scope, id: ElementId) -> Option<PathInfo> 
                 .iter()
                 .map(|n| {
                     let q = m.apply(n.point());
-                    NodeInfo { x: q.x, y: q.y, handle_in: n.handle_in.map(|h| m.apply(h)), handle_out: n.handle_out.map(|h| m.apply(h)), kind: n.kind }
+                    NodeInfo {
+                        x: q.x,
+                        y: q.y,
+                        handle_in: n.handle_in.map(|h| m.apply(h)),
+                        handle_out: n.handle_out.map(|h| m.apply(h)),
+                        kind: n.kind,
+                    }
                 })
                 .collect()
         })
@@ -842,7 +865,9 @@ pub fn path_info(p: &Project, scope: &Scope, id: ElementId) -> Option<PathInfo> 
 /// The point on a shape's outline nearest `pt` (stage), within `tolerance`.
 pub fn path_hit(p: &Project, scope: &Scope, id: ElementId, pt: Point, tolerance: f64) -> Option<crate::vector::PathHit> {
     let e = p.element(id)?;
-    let ElementKind::Shape(s) = &e.kind else { return None };
+    let ElementKind::Shape(s) = &e.kind else {
+        return None;
+    };
     let m = scope.matrix * e.transform.matrix();
     let local = m.invert()?.apply(pt);
     let hit = s.geometry.to_vector_path().nearest(local)?;
@@ -859,7 +884,9 @@ pub enum GradientControls {
 
 pub fn gradient_controls(p: &Project, scope: &Scope, id: ElementId, part: PaintPart) -> Option<GradientControls> {
     let e = p.element(id)?;
-    let ElementKind::Shape(s) = &e.kind else { return None };
+    let ElementKind::Shape(s) = &e.kind else {
+        return None;
+    };
     let m = scope.matrix * e.transform.matrix();
     match paint_of(s, part)? {
         Paint::Linear { start, end, .. } => Some(GradientControls::Linear { start: m.apply(*start), end: m.apply(*end) }),
@@ -906,7 +933,8 @@ mod tests {
         let mut doc = Document::new(demo_project());
         let before = render(&doc.project);
         let sun = named(&doc.project, "sun");
-        let s = TransformSession::begin(&doc.project, Scope::root(&doc.project), &[sun], DragMode::Move, Point::new(820.0, 90.0)).unwrap();
+        let s = TransformSession::begin(&doc.project, Scope::root(&doc.project), &[sun], DragMode::Move, Point::new(820.0, 90.0))
+            .unwrap();
         s.update(&mut doc.project, Point::new(830.0, 95.0), Modifiers::default(), &no_snap());
         s.update(&mut doc.project, Point::new(840.0, 100.0), Modifiers::default(), &no_snap());
         assert_eq!(doc.project.element(sun).unwrap().transform.x, 840.0);
@@ -922,7 +950,9 @@ mod tests {
         let mut doc = Document::new(demo_project());
         let before = doc.project.clone();
         let sun = named(&doc.project, "sun");
-        let s = TransformSession::begin(&doc.project, Scope::root(&doc.project), &[sun], DragMode::Rotate, Point::new(900.0, 90.0)).unwrap();
+        let s =
+            TransformSession::begin(&doc.project, Scope::root(&doc.project), &[sun], DragMode::Rotate, Point::new(900.0, 90.0))
+                .unwrap();
         s.update(&mut doc.project, Point::new(820.0, 200.0), Modifiers::default(), &no_snap());
         s.cancel(&mut doc.project);
         assert_eq!(doc.project, before);
@@ -983,7 +1013,9 @@ mod tests {
         let s = TransformSession::begin(&p, scope, &ids, DragMode::Rotate, Point::new(1000.0, 200.0)).unwrap();
         let c = s.center;
         s.update(&mut p, Point::new(c.x, c.y + 500.0), Modifiers::default(), &no_snap());
-        let g = Matrix::translate(c.x, c.y) * Matrix::rotate(s_angle(c, Point::new(1000.0, 200.0), Point::new(c.x, c.y + 500.0))) * Matrix::translate(-c.x, -c.y);
+        let g = Matrix::translate(c.x, c.y)
+            * Matrix::rotate(s_angle(c, Point::new(1000.0, 200.0), Point::new(c.x, c.y + 500.0)))
+            * Matrix::translate(-c.x, -c.y);
         for (id, m0) in ids.iter().zip(before) {
             assert!(p.element(*id).unwrap().transform.matrix().approx_eq(&(g * m0), 1e-9));
         }
@@ -1011,7 +1043,9 @@ mod tests {
     fn skew_edge_drag() {
         let mut p = demo_project();
         let sun = named(&p, "sun");
-        let s = TransformSession::begin(&p, Scope::root(&p), &[sun], DragMode::Skew { handle: Handle::S }, Point::new(820.0, 145.0)).unwrap();
+        let s =
+            TransformSession::begin(&p, Scope::root(&p), &[sun], DragMode::Skew { handle: Handle::S }, Point::new(820.0, 145.0))
+                .unwrap();
         // Bottom edge sheared 110 px over the 110 px box height → 45°.
         s.update(&mut p, Point::new(930.0, 145.0), Modifiers::default(), &no_snap());
         let t = p.element(sun).unwrap().transform;
@@ -1021,17 +1055,52 @@ mod tests {
 
     #[test]
     fn shape_drags() {
-        let d = shape_from_drag(ShapeTool::Rect, Point::new(10.0, 10.0), Point::new(50.0, 30.0), Modifiers::default(), &ShapeOptions::default()).unwrap();
+        let d = shape_from_drag(
+            ShapeTool::Rect,
+            Point::new(10.0, 10.0),
+            Point::new(50.0, 30.0),
+            Modifiers::default(),
+            &ShapeOptions::default(),
+        )
+        .unwrap();
         assert_eq!(d.geometry, Geometry::Rect { width: 40.0, height: 20.0 });
         assert_eq!(d.center, Point::new(30.0, 20.0));
-        let sq = shape_from_drag(ShapeTool::Ellipse, Point::new(10.0, 10.0), Point::new(-30.0, 20.0), Modifiers { shift: true, alt: false }, &ShapeOptions::default()).unwrap();
+        let sq = shape_from_drag(
+            ShapeTool::Ellipse,
+            Point::new(10.0, 10.0),
+            Point::new(-30.0, 20.0),
+            Modifiers { shift: true, alt: false },
+            &ShapeOptions::default(),
+        )
+        .unwrap();
         assert_eq!(sq.geometry, Geometry::Ellipse { width: 40.0, height: 40.0 });
         assert_eq!(sq.center, Point::new(-10.0, 30.0));
-        let c = shape_from_drag(ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(5.0, 3.0), Modifiers { shift: false, alt: true }, &ShapeOptions::default()).unwrap();
+        let c = shape_from_drag(
+            ShapeTool::Rect,
+            Point::new(0.0, 0.0),
+            Point::new(5.0, 3.0),
+            Modifiers { shift: false, alt: true },
+            &ShapeOptions::default(),
+        )
+        .unwrap();
         assert_eq!((c.geometry, c.center), (Geometry::Rect { width: 10.0, height: 6.0 }, Point::new(0.0, 0.0)));
-        let l = shape_from_drag(ShapeTool::Line, Point::new(0.0, 0.0), Point::new(10.0, 1.0), Modifiers { shift: true, alt: false }, &ShapeOptions::default()).unwrap();
+        let l = shape_from_drag(
+            ShapeTool::Line,
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 1.0),
+            Modifiers { shift: true, alt: false },
+            &ShapeOptions::default(),
+        )
+        .unwrap();
         assert_eq!(l.geometry, Geometry::Line { dx: 10.04987562112089, dy: 0.0 });
-        assert!(shape_from_drag(ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(0.5, 9.0), Modifiers::default(), &ShapeOptions::default()).is_none());
+        assert!(shape_from_drag(
+            ShapeTool::Rect,
+            Point::new(0.0, 0.0),
+            Point::new(0.5, 9.0),
+            Modifiers::default(),
+            &ShapeOptions::default()
+        )
+        .is_none());
     }
 
     #[test]
@@ -1071,7 +1140,14 @@ mod tests {
         let info = path_info(&doc.project, &scope, sun).unwrap();
         assert!(info.primitive);
         let a0 = &info.subpaths[0][0]; // rightmost point of the sun (875, 90)
-        let s = EditSession::begin(&doc.project, scope, sun, EditTarget::Anchors { nodes: vec![NodeRef { subpath: 0, node: 0 }] }, Point::new(a0.x, a0.y)).unwrap();
+        let s = EditSession::begin(
+            &doc.project,
+            scope,
+            sun,
+            EditTarget::Anchors { nodes: vec![NodeRef { subpath: 0, node: 0 }] },
+            Point::new(a0.x, a0.y),
+        )
+        .unwrap();
         s.update(&mut doc.project, Point::new(a0.x + 30.0, a0.y), Modifiers::default()).unwrap();
         s.commit(&mut doc).unwrap();
         let after = path_info(&doc.project, &scope, sun).unwrap();
@@ -1087,9 +1163,19 @@ mod tests {
         let mut doc = Document::new(demo_project());
         let sun = named(&doc.project, "sun");
         let scope = Scope::root(&doc.project);
-        let Some(GradientControls::Radial { center, radius, .. }) = gradient_controls(&doc.project, &scope, sun, PaintPart::Fill) else { panic!() };
+        let Some(GradientControls::Radial { center, radius, .. }) = gradient_controls(&doc.project, &scope, sun, PaintPart::Fill)
+        else {
+            panic!()
+        };
         assert_eq!((center, radius), (Point::new(820.0, 90.0), Point::new(875.0, 90.0)));
-        let s = EditSession::begin(&doc.project, scope, sun, EditTarget::Gradient { part: PaintPart::Fill, handle: GradientHandle::Radius }, radius).unwrap();
+        let s = EditSession::begin(
+            &doc.project,
+            scope,
+            sun,
+            EditTarget::Gradient { part: PaintPart::Fill, handle: GradientHandle::Radius },
+            radius,
+        )
+        .unwrap();
         s.update(&mut doc.project, Point::new(820.0, 170.0), Modifiers::default()).unwrap();
         // Focal clamps inside the circle.
         s.commit(&mut doc).unwrap();
@@ -1097,12 +1183,26 @@ mod tests {
         let ElementKind::Shape(sh) = &e.kind else { panic!() };
         let Some(Paint::Radial { radius, .. }) = &sh.fill else { panic!() };
         assert!((radius - 80.0).abs() < 1e-9);
-        assert!(EditSession::begin(&doc.project, scope, named(&doc.project, "ground"), EditTarget::Gradient { part: PaintPart::Fill, handle: GradientHandle::Start }, Point::default()).is_err());
+        assert!(EditSession::begin(
+            &doc.project,
+            scope,
+            named(&doc.project, "ground"),
+            EditTarget::Gradient { part: PaintPart::Fill, handle: GradientHandle::Start },
+            Point::default()
+        )
+        .is_err());
     }
 
     #[test]
     fn polygon_tool() {
-        let d = shape_from_drag(ShapeTool::Polygon, Point::new(50.0, 50.0), Point::new(50.0, 10.0), Modifiers::default(), &ShapeOptions { sides: 6, star: None }).unwrap();
+        let d = shape_from_drag(
+            ShapeTool::Polygon,
+            Point::new(50.0, 50.0),
+            Point::new(50.0, 10.0),
+            Modifiers::default(),
+            &ShapeOptions { sides: 6, star: None },
+        )
+        .unwrap();
         assert_eq!(d.center, Point::new(50.0, 50.0));
         let Geometry::Path(v) = &d.geometry else { panic!() };
         assert_eq!(v.subpaths[0].nodes.len(), 6);

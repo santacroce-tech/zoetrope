@@ -28,13 +28,7 @@ const BASE_STATE: u64 = 0;
 
 impl Document {
     pub fn new(project: Project) -> Self {
-        Document {
-            project,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            next_state: BASE_STATE + 1,
-            saved_state: BASE_STATE,
-        }
+        Document { project, undo_stack: Vec::new(), redo_stack: Vec::new(), next_state: BASE_STATE + 1, saved_state: BASE_STATE }
     }
 
     /// Applies `edits` atomically as one undoable step. If any edit fails,
@@ -53,7 +47,9 @@ impl Document {
 
     /// Returns `Ok(false)` when there is nothing to undo.
     pub fn undo(&mut self) -> Result<bool> {
-        let Some(t) = self.undo_stack.pop() else { return Ok(false) };
+        let Some(t) = self.undo_stack.pop() else {
+            return Ok(false);
+        };
         match apply_all(&mut self.project, t.undo.clone()) {
             Ok(redo) => {
                 self.redo_stack.push(Transaction { undo: redo, ..t });
@@ -68,7 +64,9 @@ impl Document {
 
     /// Returns `Ok(false)` when there is nothing to redo.
     pub fn redo(&mut self) -> Result<bool> {
-        let Some(t) = self.redo_stack.pop() else { return Ok(false) };
+        let Some(t) = self.redo_stack.pop() else {
+            return Ok(false);
+        };
         match apply_all(&mut self.project, t.undo.clone()) {
             Ok(undo) => {
                 self.undo_stack.push(Transaction { undo, ..t });
@@ -91,6 +89,15 @@ impl Document {
         Ok(undone)
     }
 
+    /// Steps that can be undone / redone.
+    pub fn undo_depth(&self) -> usize {
+        self.undo_stack.len()
+    }
+
+    pub fn redo_depth(&self) -> usize {
+        self.redo_stack.len()
+    }
+
     pub fn undo_label(&self) -> Option<&str> {
         self.undo_stack.last().map(|t| t.label.as_str())
     }
@@ -105,6 +112,12 @@ impl Document {
 
     pub fn mark_saved(&mut self) {
         self.saved_state = self.current_state();
+    }
+
+    /// Treats the current state as unsaved (e.g. work recovered from an
+    /// autosave) until the next `mark_saved`.
+    pub fn mark_unsaved(&mut self) {
+        self.saved_state = u64::MAX;
     }
 
     /// True when the project differs from the last saved (or loaded) state.

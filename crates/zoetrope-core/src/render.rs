@@ -202,7 +202,9 @@ impl<'a> Ctx<'a> {
         if depth > MAX_NESTING_DEPTH {
             return;
         }
-        let Some(symbol) = self.project.symbol(id) else { return };
+        let Some(symbol) = self.project.symbol(id) else {
+            return;
+        };
         self.layers(&symbol.layers, frame, m, ct, depth, path, excl, r);
     }
 

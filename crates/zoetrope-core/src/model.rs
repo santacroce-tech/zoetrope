@@ -110,7 +110,13 @@ pub struct Publish {
 
 impl Default for Publish {
     fn default() -> Self {
-        Publish { title: String::new(), scale: ScaleMode::default(), mode: ExportMode::default(), page_color: default_page_color(), start_on_click: false }
+        Publish {
+            title: String::new(),
+            scale: ScaleMode::default(),
+            mode: ExportMode::default(),
+            page_color: default_page_color(),
+            start_on_click: false,
+        }
     }
 }
 
@@ -300,7 +306,9 @@ pub enum ElementKind {
         loop_mode: LoopMode,
     },
     /// An embedded image, drawn at its pixel size centered on the origin.
-    Bitmap { asset: AssetId },
+    Bitmap {
+        asset: AssetId,
+    },
     /// Static text (laid out by the core from an embedded font).
     Text(TextBlock),
 }
@@ -560,10 +568,19 @@ impl Shape {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Geometry {
-    Rect { width: f64, height: f64 },
-    Ellipse { width: f64, height: f64 },
+    Rect {
+        width: f64,
+        height: f64,
+    },
+    Ellipse {
+        width: f64,
+        height: f64,
+    },
     /// From `(-dx/2, -dy/2)` to `(dx/2, dy/2)`.
-    Line { dx: f64, dy: f64 },
+    Line {
+        dx: f64,
+        dy: f64,
+    },
     Path(VectorPath),
 }
 
@@ -869,8 +886,9 @@ impl Project {
     }
 
     /// Lays out a text block with its font (see `text::layout`).
-    pub fn layout_text(&self, t: &TextBlock) -> Option<crate::text::TextLayout> {
-        crate::text::layout(t, self.font_data(t.font)?)
+    /// Lays out a text element (cached: see `text::layout_cached`).
+    pub fn layout_text(&self, t: &TextBlock) -> Option<std::rc::Rc<crate::text::TextLayout>> {
+        crate::text::layout_cached(t, self.font_data(t.font)?)
     }
 
     /// Structural integrity check, run on every load.
@@ -928,7 +946,9 @@ impl Project {
                             ElementKind::Instance { symbol, .. } if self.symbol(symbol).is_none() => {
                                 return invalid(format!("element {} instances missing symbol {}", e.id.0, symbol.0))
                             }
-                            ElementKind::Bitmap { asset } if !matches!(self.asset(asset).map(|a| &a.kind), Some(AssetKind::Image { .. })) => {
+                            ElementKind::Bitmap { asset }
+                                if !matches!(self.asset(asset).map(|a| &a.kind), Some(AssetKind::Image { .. })) =>
+                            {
                                 return invalid(format!("element {} references missing image {}", e.id.0, asset.0))
                             }
                             ElementKind::Text(ref t) if self.font_data(t.font).is_none() => {

@@ -50,7 +50,9 @@ pub struct SceneElement<'a> {
 
 /// Elements of `symbol` visible at `frame`, in render order (back first).
 pub fn scene_elements<'a>(p: &'a Project, symbol: SymbolId, frame: u32) -> Vec<SceneElement<'a>> {
-    let Some(sym) = p.symbol(symbol) else { return Vec::new() };
+    let Some(sym) = p.symbol(symbol) else {
+        return Vec::new();
+    };
     sym.content_layers()
         .into_iter()
         .filter(|(_, vis, _)| *vis)
@@ -79,7 +81,9 @@ pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, child_frame: 
             Some(b.inflate(half))
         }
         ElementKind::Bitmap { asset } => {
-            let AssetKind::Image { width, height, .. } = p.asset(*asset)?.kind else { return None };
+            let AssetKind::Image { width, height, .. } = p.asset(*asset)?.kind else {
+                return None;
+            };
             let (w, h) = (width as f64, height as f64);
             Some(Rect::new(-w / 2.0, -h / 2.0, w / 2.0, h / 2.0).transformed(m))
         }
@@ -91,11 +95,9 @@ pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, child_frame: 
             if depth > MAX_NESTING_DEPTH {
                 return None;
             }
-            Rect::union_all(
-                scene_elements(p, *symbol, child_frame)
-                    .into_iter()
-                    .filter_map(|se| content_bounds(p, &se.element.kind, &(*m * se.element.transform.matrix()), se.child_frame, depth + 1)),
-            )
+            Rect::union_all(scene_elements(p, *symbol, child_frame).into_iter().filter_map(|se| {
+                content_bounds(p, &se.element.kind, &(*m * se.element.transform.matrix()), se.child_frame, depth + 1)
+            }))
         }
     }
 }
@@ -150,14 +152,20 @@ pub fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, ch
             path.distance_to_outline(q) <= half + tol / scale_factor(m)
         }
         ElementKind::Bitmap { asset } => {
-            let (Some(a), Some(inv)) = (p.asset(*asset), m.invert()) else { return false };
-            let AssetKind::Image { width, height, .. } = a.kind else { return false };
+            let (Some(a), Some(inv)) = (p.asset(*asset), m.invert()) else {
+                return false;
+            };
+            let AssetKind::Image { width, height, .. } = a.kind else {
+                return false;
+            };
             let q = inv.apply(pt);
             q.x.abs() <= width as f64 / 2.0 && q.y.abs() <= height as f64 / 2.0
         }
         ElementKind::Text(t) => {
             // The whole text box is clickable (not just the ink).
-            let (Some(l), Some(inv)) = (p.layout_text(t), m.invert()) else { return false };
+            let (Some(l), Some(inv)) = (p.layout_text(t), m.invert()) else {
+                return false;
+            };
             let q = inv.apply(pt);
             let pad = tol / scale_factor(m);
             q.x >= -pad && q.x <= l.width.max(1.0) + pad && q.y >= -pad && q.y <= l.height + pad
@@ -181,7 +189,15 @@ pub fn pick_shape(p: &Project, scope: &Scope, pt: Point, tolerance: f64) -> Opti
     pick_in(p, scope.symbol, scope.frame, &scope.matrix, pt, tolerance, 0)
 }
 
-fn pick_in(p: &Project, symbol: SymbolId, frame: u32, m: &Matrix, pt: Point, tol: f64, depth: usize) -> Option<(Shape, crate::interact::PaintPart)> {
+fn pick_in(
+    p: &Project,
+    symbol: SymbolId,
+    frame: u32,
+    m: &Matrix,
+    pt: Point,
+    tol: f64,
+    depth: usize,
+) -> Option<(Shape, crate::interact::PaintPart)> {
     use crate::interact::PaintPart;
     if depth > MAX_NESTING_DEPTH {
         return None;
@@ -221,7 +237,8 @@ pub fn marquee(p: &Project, scope: &Scope, rect: Rect) -> Vec<ElementId> {
         .into_iter()
         .filter(|se| !se.locked)
         .filter(|se| {
-            content_bounds(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), se.child_frame, 0).is_some_and(|b| b.intersects(&rect))
+            content_bounds(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), se.child_frame, 0)
+                .is_some_and(|b| b.intersects(&rect))
         })
         .map(|se| se.element.id)
         .collect()

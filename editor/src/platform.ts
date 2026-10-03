@@ -99,3 +99,70 @@ function pickBrowserFiles(accept: string, multiple: boolean): Promise<File[]> {
     input.click();
   });
 }
+
+// ------------------------------------------------------------------ autosave
+
+/** What the autosave knows besides the project itself. */
+export interface AutosaveMeta {
+  /** The file it belongs to, or null if it was never saved. */
+  path: string | null;
+  /** When it was written (ms since epoch). */
+  savedAt: number;
+}
+
+export interface AutosaveEntry {
+  contents: string;
+  meta: AutosaveMeta;
+}
+
+const IDB = { name: "zoetrope", store: "autosave", key: "current" };
+
+/** Browser fallback: one IndexedDB record (projects can be several MB, too big for localStorage). */
+function idb<T>(mode: IDBTransactionMode, op: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(IDB.name, 1);
+    open.onupgradeneeded = () => open.result.createObjectStore(IDB.store);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction(IDB.store, mode);
+      const req = op(tx.objectStore(IDB.store));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => open.result.close();
+    };
+  });
+}
+
+export async function writeAutosave(entry: AutosaveEntry): Promise<void> {
+  if (isTauri) return invoke("autosave_write", { contents: entry.contents, meta: JSON.stringify(entry.meta) });
+  await idb("readwrite", (s) => s.put(entry, IDB.key));
+}
+
+export async function readAutosave(): Promise<AutosaveEntry | null> {
+  if (isTauri) {
+    const r = await invoke<{ contents: string; meta: string } | null>("autosave_read");
+    return r ? { contents: r.contents, meta: JSON.parse(r.meta) } : null;
+  }
+  return (await idb<AutosaveEntry | undefined>("readonly", (s) => s.get(IDB.key))) ?? null;
+}
+
+export async function clearAutosave(): Promise<void> {
+  if (isTauri) return invoke("autosave_clear");
+  await idb("readwrite", (s) => s.delete(IDB.key));
+}
+
+// ------------------------------------------------------------------ recent files
+
+export interface RecentFile {
+  path: string;
+  name: string;
+}
+
+/** Recently opened/saved projects (native app only; a browser can't reopen files by path). */
+export async function recentFiles(): Promise<RecentFile[]> {
+  return isTauri ? invoke<RecentFile[]>("recent_files") : [];
+}
+
+export async function openRecent(path: string): Promise<OpenedFile> {
+  return invoke<OpenedFile>("open_recent", { path });
+}

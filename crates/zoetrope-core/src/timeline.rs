@@ -12,10 +12,10 @@
 //! unmatched elements are shown as-is.
 
 use crate::color::Color;
+use crate::math::Point;
 use crate::model::*;
 use crate::paint::{GradientStop, Paint, Stroke};
 use crate::vector::{Node, NodeKind, SubPath, VectorPath};
-use crate::math::Point;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -166,7 +166,11 @@ impl Easing {
 
     pub fn validate(&self) -> crate::Result<()> {
         match *self {
-            Easing::Bezier { x1, y1, x2, y2 } if ![x1, y1, x2, y2].iter().all(|v| v.is_finite()) || !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2) => {
+            Easing::Bezier { x1, y1, x2, y2 }
+                if ![x1, y1, x2, y2].iter().all(|v| v.is_finite())
+                    || !(0.0..=1.0).contains(&x1)
+                    || !(0.0..=1.0).contains(&x2) =>
+            {
                 Err(crate::Error::Invalid("bezier easing needs finite values with x1, x2 in 0..1".into()))
             }
             _ => Ok(()),
@@ -197,10 +201,22 @@ fn preset(p: EasePreset, t: f64) -> f64 {
     match p {
         EaseInQuad => t * t,
         EaseOutQuad => 1.0 - (1.0 - t) * (1.0 - t),
-        EaseInOutQuad => if t < 0.5 { 2.0 * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(2) / 2.0 },
+        EaseInOutQuad => {
+            if t < 0.5 {
+                2.0 * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+            }
+        }
         EaseInCubic => t * t * t,
         EaseOutCubic => 1.0 - (1.0 - t).powi(3),
-        EaseInOutCubic => if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 },
+        EaseInOutCubic => {
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+            }
+        }
         EaseInSine => 1.0 - (t * PI / 2.0).cos(),
         EaseOutSine => (t * PI / 2.0).sin(),
         EaseInOutSine => -((PI * t).cos() - 1.0) / 2.0,
@@ -215,7 +231,13 @@ fn preset(p: EasePreset, t: f64) -> f64 {
         }
         EaseInBounce => 1.0 - bounce_out(1.0 - t),
         EaseOutBounce => bounce_out(t),
-        EaseInOutBounce => if t < 0.5 { (1.0 - bounce_out(1.0 - 2.0 * t)) / 2.0 } else { (1.0 + bounce_out(2.0 * t - 1.0)) / 2.0 },
+        EaseInOutBounce => {
+            if t < 0.5 {
+                (1.0 - bounce_out(1.0 - 2.0 * t)) / 2.0
+            } else {
+                (1.0 + bounce_out(2.0 * t - 1.0)) / 2.0
+            }
+        }
         EaseInElastic => match t {
             0.0 => 0.0,
             1.0 => 1.0,
@@ -238,7 +260,8 @@ fn preset(p: EasePreset, t: f64) -> f64 {
 /// CSS cubic-bezier timing: find s with x(s) = t (Newton, then bisection), return y(s).
 fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, t: f64) -> f64 {
     let curve = |a: f64, b: f64, s: f64| 3.0 * (1.0 - s) * (1.0 - s) * s * a + 3.0 * (1.0 - s) * s * s * b + s * s * s;
-    let slope = |a: f64, b: f64, s: f64| 3.0 * (1.0 - s) * (1.0 - s) * a + 6.0 * (1.0 - s) * s * (b - a) + 3.0 * s * s * (1.0 - b);
+    let slope =
+        |a: f64, b: f64, s: f64| 3.0 * (1.0 - s) * (1.0 - s) * a + 6.0 * (1.0 - s) * s * (b - a) + 3.0 * s * s * (1.0 - b);
     let mut s = t;
     for _ in 0..8 {
         let err = curve(x1, x2, s) - t;
@@ -335,33 +358,79 @@ pub struct Shown<'a> {
 }
 
 pub fn evaluate_layer_shown(layer: &Layer, frame: u32) -> Vec<Shown<'_>> {
-    let Some((i, start)) = layer.keyframe_at(frame) else { return Vec::new() };
+    use std::collections::{HashMap, HashSet};
+    let Some((i, start)) = layer.keyframe_at(frame) else {
+        return Vec::new();
+    };
     let kf = &layer.keyframes[i];
-    let appeared = |e: &Element| -> u32 {
-        let ElementKind::Instance { symbol, .. } = e.kind else { return start };
-        let mut j = i;
-        while j > 0
-            && layer.keyframes[j - 1]
-                .elements
-                .iter()
-                .any(|p| p.track() == e.track() && matches!(p.kind, ElementKind::Instance { symbol: s, .. } if s == symbol))
-        {
-            j -= 1;
-        }
-        layer.keyframe_start(j)
+    // When each instance appeared: walk back while earlier keyframes still
+    // hold the same track with the same symbol. One pass per keyframe
+    // (linear in the elements scanned, not quadratic).
+    let mut appeared: HashMap<u32, u32> = HashMap::new();
+    let mut alive: HashMap<u32, SymbolId> = if i == 0 {
+        HashMap::new()
+    } else {
+        kf.elements
+            .iter()
+            .filter_map(|e| match e.kind {
+                ElementKind::Instance { symbol, .. } => Some((e.track(), symbol)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut j = if alive.is_empty() { 0 } else { i };
+    while j > 0 && !alive.is_empty() {
+        let held: HashSet<(u32, SymbolId)> = layer.keyframes[j - 1]
+            .elements
+            .iter()
+            .filter_map(|p| match p.kind {
+                ElementKind::Instance { symbol, .. } => Some((p.track(), symbol)),
+                _ => None,
+            })
+            .collect();
+        let before = layer.keyframe_start(j);
+        alive.retain(|track, symbol| {
+            let keeps = held.contains(&(*track, *symbol));
+            if !keeps {
+                appeared.insert(*track, before);
+            }
+            keeps
+        });
+        j -= 1;
+    }
+    let first = if i == 0 { 0 } else { layer.keyframe_start(j) };
+    let appeared_of = |e: &Element| match e.kind {
+        ElementKind::Instance { .. } => appeared.get(&e.track()).copied().unwrap_or(first),
+        _ => start,
     };
     let tween = match (&kf.tween, layer.keyframes.get(i + 1)) {
-        (Some(tween), Some(next)) if frame > start => Some((tween, next, tween.easing.apply((frame - start) as f64 / kf.duration as f64))),
+        (Some(tween), Some(next)) if frame > start => {
+            Some((tween, next, tween.easing.apply((frame - start) as f64 / kf.duration as f64)))
+        }
         _ => None,
+    };
+    // Tween partners by track (indexed when there are many).
+    const INDEX_FROM: usize = 16;
+    let partners: HashMap<u32, &Element> = match tween {
+        Some((_, next, _)) if next.elements.len() > INDEX_FROM => next.elements.iter().rev().map(|b| (b.track(), b)).collect(),
+        _ => HashMap::new(),
+    };
+    let partner = |a: &Element| -> Option<&Element> {
+        let (_, next, _) = tween?;
+        if next.elements.len() > INDEX_FROM {
+            partners.get(&a.track()).copied()
+        } else {
+            next.elements.iter().find(|b| b.track() == a.track())
+        }
     };
     kf.elements
         .iter()
         .map(|a| {
-            let element = match tween.and_then(|(tw, next, t)| next.elements.iter().find(|b| b.track() == a.track()).map(|b| (tw, b, t))) {
-                Some((tw, b, t)) => Cow::Owned(interpolate(a, b, t, tw)),
-                None => Cow::Borrowed(a),
+            let element = match (tween, partner(a)) {
+                (Some((tw, _, t)), Some(b)) => Cow::Owned(interpolate(a, b, t, tw)),
+                _ => Cow::Borrowed(a),
             };
-            Shown { element, keyframe_start: start, appeared: appeared(a) }
+            Shown { element, keyframe_start: start, appeared: appeared_of(a) }
         })
         .collect()
 }
@@ -374,7 +443,9 @@ pub fn evaluate_layer_shown(layer: &Layer, frame: u32) -> Vec<Shown<'_>> {
 /// - button: the Up state (frame 0).
 pub fn instance_frame(child: &Symbol, kind: &ElementKind, shown: &Shown, parent_frame: u32) -> u32 {
     let len = child.length();
-    let ElementKind::Instance { first_frame, loop_mode, .. } = *kind else { return 0 };
+    let ElementKind::Instance { first_frame, loop_mode, .. } = *kind else {
+        return 0;
+    };
     match child.kind {
         SymbolKind::Graphic => graphic_frame(first_frame, loop_mode, parent_frame.saturating_sub(shown.keyframe_start), len),
         SymbolKind::MovieClip => parent_frame.saturating_sub(shown.appeared) % len,
@@ -453,10 +524,18 @@ fn lerp_shape(a: &Shape, b: &Shape, t: f64) -> Shape {
         (Geometry::Ellipse { width: w0, height: h0 }, Geometry::Ellipse { width: w1, height: h1 }) => {
             Geometry::Ellipse { width: lerp(*w0, *w1, t), height: lerp(*h0, *h1, t) }
         }
-        (Geometry::Line { dx: x0, dy: y0 }, Geometry::Line { dx: x1, dy: y1 }) => Geometry::Line { dx: lerp(*x0, *x1, t), dy: lerp(*y0, *y1, t) },
+        (Geometry::Line { dx: x0, dy: y0 }, Geometry::Line { dx: x1, dy: y1 }) => {
+            Geometry::Line { dx: lerp(*x0, *x1, t), dy: lerp(*y0, *y1, t) }
+        }
         (ga, gb) => match morph(&ga.to_vector_path(), &gb.to_vector_path(), t) {
             Some(p) => Geometry::Path(p),
-            None => if t < 0.5 { ga.clone() } else { gb.clone() },
+            None => {
+                if t < 0.5 {
+                    ga.clone()
+                } else {
+                    gb.clone()
+                }
+            }
         },
     };
     let fill = match (&a.fill, &b.fill) {
@@ -492,45 +571,82 @@ fn fade(p: &Paint, k: f64) -> Paint {
     let f = |c: Color| Color { a: (c.a as f64 * k).round() as u8, ..c };
     match p {
         Paint::Solid { color } => Paint::Solid { color: f(*color) },
-        Paint::Linear { start, end, stops } => Paint::Linear { start: *start, end: *end, stops: stops.iter().map(|s| GradientStop { color: f(s.color), ..*s }).collect() },
-        Paint::Radial { center, radius, focal, stops } => {
-            Paint::Radial { center: *center, radius: *radius, focal: *focal, stops: stops.iter().map(|s| GradientStop { color: f(s.color), ..*s }).collect() }
-        }
+        Paint::Linear { start, end, stops } => Paint::Linear {
+            start: *start,
+            end: *end,
+            stops: stops.iter().map(|s| GradientStop { color: f(s.color), ..*s }).collect(),
+        },
+        Paint::Radial { center, radius, focal, stops } => Paint::Radial {
+            center: *center,
+            radius: *radius,
+            focal: *focal,
+            stops: stops.iter().map(|s| GradientStop { color: f(s.color), ..*s }).collect(),
+        },
     }
 }
 
 fn lerp_stops(a: &[GradientStop], b: &[GradientStop], t: f64) -> Option<Vec<GradientStop>> {
-    (a.len() == b.len()).then(|| a.iter().zip(b).map(|(x, y)| GradientStop { offset: lerp(x.offset, y.offset, t), color: lerp_color(x.color, y.color, t) }).collect())
+    (a.len() == b.len()).then(|| {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| GradientStop { offset: lerp(x.offset, y.offset, t), color: lerp_color(x.color, y.color, t) })
+            .collect()
+    })
 }
 
 fn lerp_paint(a: &Paint, b: &Paint, t: f64) -> Paint {
     match (a, b) {
         (Paint::Solid { color: ca }, Paint::Solid { color: cb }) => Paint::Solid { color: lerp_color(*ca, *cb, t) },
-        (Paint::Linear { start: s0, end: e0, stops: st0 }, Paint::Linear { start: s1, end: e1, stops: st1 }) => match lerp_stops(st0, st1, t) {
-            Some(stops) => Paint::Linear { start: lerp_pt(*s0, *s1, t), end: lerp_pt(*e0, *e1, t), stops },
-            None => if t < 0.5 { a.clone() } else { b.clone() },
-        },
-        (Paint::Radial { center: c0, radius: r0, focal: f0, stops: st0 }, Paint::Radial { center: c1, radius: r1, focal: f1, stops: st1 }) => {
+        (Paint::Linear { start: s0, end: e0, stops: st0 }, Paint::Linear { start: s1, end: e1, stops: st1 }) => {
             match lerp_stops(st0, st1, t) {
-                Some(stops) => Paint::Radial {
-                    center: lerp_pt(*c0, *c1, t),
-                    radius: lerp(*r0, *r1, t),
-                    focal: match (f0, f1) {
-                        (None, None) => None,
-                        _ => Some(lerp_pt(f0.unwrap_or(*c0), f1.unwrap_or(*c1), t)),
-                    },
-                    stops,
-                },
-                None => if t < 0.5 { a.clone() } else { b.clone() },
+                Some(stops) => Paint::Linear { start: lerp_pt(*s0, *s1, t), end: lerp_pt(*e0, *e1, t), stops },
+                None => {
+                    if t < 0.5 {
+                        a.clone()
+                    } else {
+                        b.clone()
+                    }
+                }
             }
         }
+        (
+            Paint::Radial { center: c0, radius: r0, focal: f0, stops: st0 },
+            Paint::Radial { center: c1, radius: r1, focal: f1, stops: st1 },
+        ) => match lerp_stops(st0, st1, t) {
+            Some(stops) => Paint::Radial {
+                center: lerp_pt(*c0, *c1, t),
+                radius: lerp(*r0, *r1, t),
+                focal: match (f0, f1) {
+                    (None, None) => None,
+                    _ => Some(lerp_pt(f0.unwrap_or(*c0), f1.unwrap_or(*c1), t)),
+                },
+                stops,
+            },
+            None => {
+                if t < 0.5 {
+                    a.clone()
+                } else {
+                    b.clone()
+                }
+            }
+        },
         // A solid color tweens against a gradient as if it were a gradient of that color.
         (Paint::Solid { color }, g) | (g, Paint::Solid { color }) if !g.stops().is_empty() => {
             let solid_first = matches!(a, Paint::Solid { .. });
             let as_gradient = with_stops(g, g.stops().iter().map(|s| GradientStop { offset: s.offset, color: *color }).collect());
-            if solid_first { lerp_paint(&as_gradient, b, t) } else { lerp_paint(a, &as_gradient, t) }
+            if solid_first {
+                lerp_paint(&as_gradient, b, t)
+            } else {
+                lerp_paint(a, &as_gradient, t)
+            }
         }
-        _ => if t < 0.5 { a.clone() } else { b.clone() },
+        _ => {
+            if t < 0.5 {
+                a.clone()
+            } else {
+                b.clone()
+            }
+        }
     }
 }
 
@@ -550,7 +666,12 @@ fn as_cubic(sp: &SubPath) -> SubPath {
     let nodes = sp
         .nodes
         .iter()
-        .map(|n| Node { handle_in: Some(n.handle_in.unwrap_or(n.point())), handle_out: Some(n.handle_out.unwrap_or(n.point())), kind: NodeKind::Corner, ..*n })
+        .map(|n| Node {
+            handle_in: Some(n.handle_in.unwrap_or(n.point())),
+            handle_out: Some(n.handle_out.unwrap_or(n.point())),
+            kind: NodeKind::Corner,
+            ..*n
+        })
         .collect();
     SubPath { nodes, closed: sp.closed }
 }
@@ -639,10 +760,24 @@ mod tests {
     #[test]
     fn easing_endpoints_and_shapes() {
         let all = [
-            EasePreset::EaseInQuad, EasePreset::EaseOutQuad, EasePreset::EaseInOutQuad, EasePreset::EaseInCubic, EasePreset::EaseOutCubic,
-            EasePreset::EaseInOutCubic, EasePreset::EaseInSine, EasePreset::EaseOutSine, EasePreset::EaseInOutSine, EasePreset::EaseInBack,
-            EasePreset::EaseOutBack, EasePreset::EaseInOutBack, EasePreset::EaseInBounce, EasePreset::EaseOutBounce, EasePreset::EaseInOutBounce,
-            EasePreset::EaseInElastic, EasePreset::EaseOutElastic, EasePreset::EaseInOutElastic,
+            EasePreset::EaseInQuad,
+            EasePreset::EaseOutQuad,
+            EasePreset::EaseInOutQuad,
+            EasePreset::EaseInCubic,
+            EasePreset::EaseOutCubic,
+            EasePreset::EaseInOutCubic,
+            EasePreset::EaseInSine,
+            EasePreset::EaseOutSine,
+            EasePreset::EaseInOutSine,
+            EasePreset::EaseInBack,
+            EasePreset::EaseOutBack,
+            EasePreset::EaseInOutBack,
+            EasePreset::EaseInBounce,
+            EasePreset::EaseOutBounce,
+            EasePreset::EaseInOutBounce,
+            EasePreset::EaseInElastic,
+            EasePreset::EaseOutElastic,
+            EasePreset::EaseInOutElastic,
         ];
         for name in all {
             let e = Easing::Preset { name };

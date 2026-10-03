@@ -19,11 +19,23 @@ pub struct Asset {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AssetKind {
-    Image { mime: String, width: u32, height: u32, data: Bytes },
+    Image {
+        mime: String,
+        width: u32,
+        height: u32,
+        data: Bytes,
+    },
     /// A TrueType/OpenType font file, embedded so text renders anywhere.
-    Font { family: String, data: Bytes },
+    Font {
+        family: String,
+        data: Bytes,
+    },
     /// An audio clip (decoded by the platform: MP3, WAV, AAC/M4A, Ogg…).
-    Audio { mime: String, duration: f64, data: Bytes },
+    Audio {
+        mime: String,
+        duration: f64,
+        data: Bytes,
+    },
 }
 
 impl AssetKind {
@@ -46,7 +58,11 @@ pub fn sniff_audio(data: &[u8]) -> Option<&'static str> {
         Some("audio/wav")
     } else if data.starts_with(b"ID3") || (data.len() >= 2 && data[0] == 0xFF && data[1] & 0xE0 == 0xE0 && data[1] & 0x06 != 0) {
         // ID3 tag, or an MPEG audio frame sync (layer bits non-zero).
-        if data.len() >= 2 && data[0] == 0xFF && data[1] & 0x06 == 0 { None } else { Some("audio/mpeg") }
+        if data.len() >= 2 && data[0] == 0xFF && data[1] & 0x06 == 0 {
+            None
+        } else {
+            Some("audio/mpeg")
+        }
     } else if data.starts_with(b"OggS") {
         Some("audio/ogg")
     } else if data.len() >= 12 && &data[4..8] == b"ftyp" {

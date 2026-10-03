@@ -219,8 +219,13 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 
 | Command | Args | Returns |
 |---------|------|---------|
-| `save_project` | `contents: string, path: string \| null` | written path, or `null` if the dialog was cancelled |
+| `save_project` | `contents: string, path: string \| null` | written path, or `null` if the dialog was cancelled. A given `path` must be one the user chose in a dialog, this session or in the recent list; otherwise the call is refused. |
 | `open_project` | — | `{ path, contents }`, or `null` if cancelled |
+| `recent_files` | — | `[{ path, name }]`: recently opened or saved projects that still exist (at most 10; `recent.json` in the app config folder) |
+| `open_recent` | `path: string` | `{ path, contents }`; **only** for a path in the recent list |
+| `autosave_write` | `contents: string, meta: string` | writes `autosave.zoe` and `autosave.json` (opaque metadata) to the app data folder, atomically |
+| `autosave_read` | — | `{ contents, meta }` or `null` |
+| `autosave_clear` | — | removes the autosave |
 | `export_begin` | `single: bool, name: string` | asks for the destination (a `.html` file, or a folder for folder exports) and remembers it; the path, or `null` if cancelled |
 | `export_write` | raw bytes, header `x-file-name` (percent-encoded) | writes one export file. Single-file exports go to the chosen path. Otherwise the file goes into the chosen folder, and only plain names are accepted (no separators, no leading dot). |
 | `pick_files` | `kind: "image" \| "font" \| "audio"` | `[{ path, name }]` from a native multi-select dialog filtered by kind (`[]` if cancelled) |
@@ -229,11 +234,75 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 The shell treats project contents as opaque strings and never parses them.
 Dialogs open from Rust, so JS is granted no dialog/fs permissions
 (`capabilities/default.json` = `core:default`). The picked-path allowlist means
-the webview can never read an arbitrary file. Saves are atomic (write a temp
+the webview can never read an arbitrary file. Likewise, it can only write
+project files the user chose. The shell reads JSON only for its own
+recent-files list. Saves are atomic (write a temp
 file, then rename). The window sets `dragDropEnabled: false` so HTML5
 drag-and-drop works in the webview (layer reordering, dropping images onto the
 stage). `editor/src/platform.ts` provides browser fallbacks
 (download/upload), so the editor also runs in a plain browser.
+
+## Reliability
+
+- **Undo.** Every edit is a reversible `Edit` executed atomically through
+  `Document`, so one command is one undo step and a failing command changes
+  nothing. This is enforced by a randomized test over 26 kinds of operations
+  (TESTING.md). `next_id` is deliberately outside undo, so ids are never
+  reused.
+- **Autosave and recovery.**
+  - While there are unsaved changes, the editor writes the project every
+    *N* seconds (preference; default 30) and when the window is hidden. It
+    goes to the app data folder (native) or IndexedDB (browser).
+  - The autosave is cleared on save, open and new.
+  - Anything still there at startup came from a session that ended without
+    saving (a crash or a quit), so it is offered back. The recovered
+    document is marked unsaved and keeps its original path.
+- **Crashes.**
+  - The core installs a panic hook that logs the Rust message and location.
+    A panic aborts the WASM instance.
+  - `CrashGuard` catches React render errors and WebAssembly runtime errors
+    (aborts), and replaces the editor with a restart screen. Restarting
+    offers the autosave.
+  - Errors from commands are not crashes. They're returned as JS `Error`s
+    and shown in the status bar.
+- **Scripts** run sandboxed with CPU and memory limits (SCRIPTING.md), so
+  user code can't hang or crash the editor.
+- **Preferences** (`prefs.ts`) live in `localStorage`, and every field is
+  validated, so a damaged entry falls back to defaults.
+
+## Performance
+
+The renderer trait allows a WebGL or wgpu backend. Profiling decides whether
+it's needed, using the **Stress test** demo: 1,000 three-level flower
+instances in motion tweens, 250 movie clips and 125 text labels, which comes
+to **17,000 draw calls per frame**.
+
+| Stage | Before Phase 9 | After |
+|-------|----------------|-------|
+| Core traversal (native) | 2.24 ms | 1.23 ms |
+| Core traversal (WASM, null renderer) | — | 0.39 ms |
+| Full Canvas2D frame in the editor (Chrome, M-series Mac) | 17.6 ms | **9.6 ms** |
+
+Changes:
+- **Text layout is memoized** (`text::layout_cached`). It is keyed by
+  everything layout depends on, including the font asset and the identity of
+  its bytes, and cleared when the document is replaced. Shaping had
+  dominated text-heavy frames.
+- **`evaluate_layer_shown` is now linear.** Tween partners and "appeared"
+  frames were found by quadratic searches; they now use hash maps, built
+  only for keyframes with many elements.
+- **Canvas2D caches `Path2D`s across frames**, keyed by exact geometry, and
+  skips fill and stroke state that didn't change. Together that removed most
+  WASM→JS calls. A plain-JS Canvas2D loop drawing the same volume takes about
+  12.6 ms, so the renderer now does better than naive direct use.
+
+**Decision: no WebGL renderer yet.** After these changes Canvas2D is no longer
+the bottleneck. A 17,000-call frame takes 9.6 ms, inside a 60 fps budget, and
+typical projects take well under 1 ms. A WebGL or wgpu backend would mean path
+tessellation, antialiasing, gradients, blend groups and stroke styling,
+behind the same `Renderer` trait. It's worth doing if projects regularly
+exceed about 30,000 draw calls. This decision is flagged for the project
+owner.
 
 ## WASM build step
 

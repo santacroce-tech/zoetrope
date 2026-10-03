@@ -23,7 +23,24 @@ import { Runtime } from "./runtime/runtime";
 import { exposeTestHook, TEST_SEED } from "./runtime/testhook";
 import type { OutputLine } from "./runtime/scripting";
 import { describeImport, importFonts } from "./assets";
-import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
+import {
+  clearAutosave,
+  fileToBinary,
+  importImages,
+  isTauri,
+  openProject,
+  openRecent,
+  readAutosave,
+  recentFiles,
+  saveProject,
+  writeAutosave,
+  type AutosaveEntry,
+  type PickedBinary,
+  type RecentFile,
+} from "./platform";
+import { loadPrefs, savePrefs, type Prefs } from "./prefs";
+import { PrefsDialog } from "./components/PrefsDialog";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
 import { Timeline, type FrameOp, type OnionSettings } from "./components/Timeline";
@@ -87,17 +104,35 @@ function Editor({ engine }: { engine: Engine }) {
   const [anchors, setAnchors] = useState<NodeRef[]>([]);
   const [frame, setFrameState] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [loop, setLoop] = useState(true);
+  const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
+  const [loop, setLoopState] = useState(prefs.loopPreview);
   const [onion, setOnion] = useState<OnionSettings>({ enabled: false, before: 2, after: 2, alpha: 0.35 });
   const [frameFocus, setFrameFocus] = useState<{ layer: number; frame: number } | null>(null);
-  const [settings, setSettings] = useState<StageSettings>({
-    showGrid: false,
-    gridSize: 20,
-    snapToGrid: false,
-    snapToObjects: true,
-    showRulers: true,
-    showGuides: true,
-  });
+  const [settings, setSettings] = useState<StageSettings>(() => ({
+    showGrid: prefs.showGrid,
+    gridSize: prefs.gridSize,
+    snapToGrid: prefs.snapToGrid,
+    snapToObjects: prefs.snapToObjects,
+    showRulers: prefs.showRulers,
+    showGuides: prefs.showGuides,
+  }));
+  // Stage toggles and the loop button are remembered as preferences.
+  const setPrefs = useCallback((p: Prefs) => {
+    setPrefsState(p);
+    savePrefs(p);
+  }, []);
+  useEffect(() => {
+    setPrefsState((p) => {
+      const next = { ...p, ...settings, loopPreview: loop };
+      savePrefs(next);
+      return next;
+    });
+  }, [settings, loop]);
+  const setLoop = setLoopState;
+  const [showPrefs, setShowPrefs] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [recovery, setRecovery] = useState<AutosaveEntry | null>(null);
+  const [recent, setRecent] = useState<RecentFile[]>([]);
   const [view, setView] = useState<View | null>(null);
   const effective = useRef<{ view: View; w: number; h: number } | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -296,6 +331,8 @@ function Editor({ engine }: { engine: Engine }) {
         engine.markSaved();
         setFilePath(path);
         setMessage({ text: `Saved ${path}` });
+        void clearAutosave().catch(() => {});
+        void recentFiles().then(setRecent, () => {});
         changed();
       } catch (e) {
         setMessage({ text: `Save failed: ${errorText(e)}`, error: true });
@@ -304,25 +341,94 @@ function Editor({ engine }: { engine: Engine }) {
     [engine, filePath, changed],
   );
 
-  const open = useCallback(async () => {
-    try {
-      const file = await openProject();
-      if (!file) return;
+  const loadOpened = useCallback(
+    (file: { path: string; contents: string }) => {
       engine.loadJson(file.contents); // throws (leaving the current doc intact) if invalid
       resetDocState();
       setFilePath(file.path);
       setMessage({ text: `Opened ${file.path}` });
+      void clearAutosave().catch(() => {});
+      void recentFiles().then(setRecent, () => {});
       changed();
+    },
+    [engine, changed], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const open = useCallback(async () => {
+    try {
+      const file = await openProject();
+      if (file) loadOpened(file);
     } catch (e) {
       setMessage({ text: `Open failed: ${errorText(e)}`, error: true });
     }
-  }, [engine, changed]);
+  }, [loadOpened]);
+
+  const openRecentFile = useCallback(
+    async (path: string) => {
+      try {
+        loadOpened(await openRecent(path));
+      } catch (e) {
+        setMessage({ text: `Open failed: ${errorText(e)}`, error: true });
+      }
+    },
+    [loadOpened],
+  );
+
+  // ---------------------------------------------------------------- autosave & recovery
+  // Unsaved work is written every few seconds (native: app data folder;
+  // browser: IndexedDB) and cleared on save/open/new. Whatever is still
+  // there at startup came from a session that ended without saving: offer it.
+  const live = useRef({ version, filePath, playing });
+  live.current = { version, filePath, playing };
+  const autosavedVersion = useRef(-1);
+  useEffect(() => {
+    void readAutosave().then((a) => a && setRecovery(a), () => {});
+    void recentFiles().then(setRecent, () => {});
+  }, []);
+  const autosaveNow = useCallback(async () => {
+    const { version: v, filePath: path } = live.current;
+    if (v === autosavedVersion.current || !JSON.parse(engine.historyJson()).dirty) return;
+    try {
+      await writeAutosave({ contents: engine.saveJson(), meta: { path, savedAt: Date.now() } });
+      autosavedVersion.current = v;
+    } catch (e) {
+      console.warn("autosave failed", e);
+    }
+  }, [engine]);
+  useEffect(() => {
+    if (!prefs.autosave) return;
+    const id = setInterval(() => void autosaveNow(), prefs.autosaveSeconds * 1000);
+    const hidden = () => document.visibilityState === "hidden" && void autosaveNow();
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [prefs.autosave, prefs.autosaveSeconds, autosaveNow]);
+
+  const recover = useCallback(
+    (entry: AutosaveEntry) => {
+      try {
+        engine.loadJson(entry.contents);
+        resetDocState();
+        setFilePath(entry.meta.path);
+        engine.markUnsaved();
+        setMessage({ text: "Recovered unsaved work. Save it to keep it." });
+        changed();
+      } catch (e) {
+        setMessage({ text: `Could not recover: ${errorText(e)}`, error: true });
+      }
+      setRecovery(null);
+    },
+    [engine, changed], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const [exporting, setExporting] = useState(false);
   const exportTitle = (filePath?.split(/[\\/]/).pop() ?? "Untitled.zoe").replace(/\.[^.]*$/, "");
 
-  const newDemo = useCallback((kind: "animation" | "game") => {
+  const newDemo = useCallback((kind: "animation" | "game" | "stress") => {
     engine.newDemo(kind);
+    void clearAutosave().catch(() => {});
     resetDocState();
     setMessage(null);
     changed();
@@ -468,7 +574,8 @@ function Editor({ engine }: { engine: Engine }) {
     const k = e.key.toLowerCase();
     const step = e.shiftKey ? 10 : 1;
     let handled = true;
-    if (e.key === "F8") {
+    if (e.key === "?" && !mod) setShowShortcuts(true);
+    else if (e.key === "F8") {
       if (hasSel) setConvert({ name: `Symbol ${library.length + 1}`, kind: "movieClip" });
       else setMessage({ text: "Select objects to convert to a symbol", error: true });
     } else if (mod && k === "e" && selection.length === 1) enterInstance(selection[0]);
@@ -535,7 +642,7 @@ function Editor({ engine }: { engine: Engine }) {
             value=""
             title="Start from a demo project"
             onChange={(e) => {
-              const kind = e.target.value as "animation" | "game";
+              const kind = e.target.value as "animation" | "game" | "stress";
               if (kind) guardUnsaved("New", () => newDemo(kind));
             }}
           >
@@ -544,12 +651,39 @@ function Editor({ engine }: { engine: Engine }) {
             </option>
             <option value="animation">Animation demo</option>
             <option value="game">Game demo (scripted)</option>
+            <option value="stress">Stress test (1000 flowers)</option>
           </select>
           <button onClick={() => guardUnsaved("Open", open)} title="⌘O">Open…</button>
           <button onClick={() => save(false)} title="⌘S">Save</button>
           <button onClick={() => save(true)} title="⇧⌘S">Save as…</button>
           <button onClick={importDialog} title="⌘I — or drop images on the stage">Import…</button>
           <button onClick={() => setExporting(true)} title="Publish as a web page that plays offline">Export…</button>
+          {recent.length > 0 && (
+            <select
+              className="menu"
+              value=""
+              title="Open a recent project"
+              onChange={(e) => {
+                const path = e.target.value;
+                if (path) guardUnsaved("Open", () => void openRecentFile(path));
+              }}
+            >
+              <option value="" disabled>
+                Recent…
+              </option>
+              {recent.map((r) => (
+                <option key={r.path} value={r.path} title={r.path}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button onClick={() => setShowPrefs(true)} title="Preferences">
+            ⚙
+          </button>
+          <button onClick={() => setShowShortcuts(true)} title="Keyboard shortcuts (?)">
+            ?
+          </button>
         </div>
         <div className="group">
           <button onClick={undo} disabled={!history.canUndo} title="⌘Z">
@@ -595,6 +729,45 @@ function Editor({ engine }: { engine: Engine }) {
         </div>
       </header>
 
+      {showPrefs && (
+        <PrefsDialog
+          prefs={prefs}
+          onClose={() => setShowPrefs(false)}
+          onSave={(p) => {
+            setPrefs(p);
+            setSettings((s) => ({ ...s, showGrid: p.showGrid, gridSize: p.gridSize, snapToGrid: p.snapToGrid, snapToObjects: p.snapToObjects, showRulers: p.showRulers, showGuides: p.showGuides }));
+            setLoop(p.loopPreview);
+          }}
+        />
+      )}
+      {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
+      {recovery && (
+        <div className="modal-backdrop">
+          <div className="modal recovery">
+            <h3>Recover unsaved work?</h3>
+            <p className="hint flush">The last session ended with changes that were never saved.</p>
+            <dl>
+              <dt>Project</dt>
+              <dd>{recovery.meta.path ?? "Untitled (never saved)"}</dd>
+              <dt>Autosaved</dt>
+              <dd>{new Date(recovery.meta.savedAt).toLocaleString()}</dd>
+            </dl>
+            <div className="btn-row">
+              <button
+                onClick={() => {
+                  void clearAutosave().catch(() => {});
+                  setRecovery(null);
+                }}
+              >
+                Discard
+              </button>
+              <button autoFocus onClick={() => recover(recovery)}>
+                Recover
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {exporting && (
         <ExportDialog
           engine={engine}

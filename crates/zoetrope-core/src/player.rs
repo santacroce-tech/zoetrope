@@ -263,7 +263,14 @@ pub struct SoundCue {
 
 fn cue(path: &[(u32, u32)], layer: LayerId, start: u32, offset: u32, sound: &SoundRef, fps: f64) -> SoundCue {
     let key = path.iter().map(|(l, t)| format!("{l}.{t}")).chain([format!("{}@{start}", layer.0)]).collect::<Vec<_>>().join("/");
-    SoundCue { key, asset: sound.asset, sync: sound.sync, position: offset as f64 / fps, volume: sound.volume, loops: sound.loops }
+    SoundCue {
+        key,
+        asset: sound.asset,
+        sync: sound.sync,
+        position: offset as f64 / fps,
+        volume: sound.volume,
+        loops: sound.loops,
+    }
 }
 
 impl Player {
@@ -365,7 +372,9 @@ impl Player {
             Seen::Sound { path, layer, start, offset, sound } => match sound.sync {
                 SoundSync::Stream => streams.push(cue(path, layer, start, offset, sound, fps)),
                 // Events fire when their keyframe is entered.
-                SoundSync::Event if offset == 0 && entered_set.contains(path) => events.push(cue(path, layer, start, offset, sound, fps)),
+                SoundSync::Event if offset == 0 && entered_set.contains(path) => {
+                    events.push(cue(path, layer, start, offset, sound, fps))
+                }
                 SoundSync::Event => {}
             },
         });
@@ -395,8 +404,12 @@ impl Player {
         let due: Vec<InstancePath> = std::mem::take(&mut self.due).into_iter().filter(|q| seen.insert(q.clone())).collect();
         let mut out = Vec::new();
         for path in due {
-            let Some((symbol, frame)) = self.timeline_at(p, &path) else { continue };
-            let Some(sym) = p.symbol(symbol) else { continue };
+            let Some((symbol, frame)) = self.timeline_at(p, &path) else {
+                continue;
+            };
+            let Some(sym) = p.symbol(symbol) else {
+                continue;
+            };
             for (layer, _, _) in sym.content_layers() {
                 if layer.kind == LayerKind::Guide {
                     continue;
@@ -417,7 +430,9 @@ impl Player {
             .into_iter()
             .filter_map(|path| {
                 let r = self.resolve(p, &path)?;
-                let ElementKind::Instance { symbol, .. } = r.element.kind else { return None };
+                let ElementKind::Instance { symbol, .. } = r.element.kind else {
+                    return None;
+                };
                 let script = p.symbol(symbol)?.script.clone()?;
                 Some(InstanceScript { path, symbol, script })
             })
@@ -452,7 +467,9 @@ impl Player {
     }
 
     fn require_timeline(&self, p: &Project, path: &[(u32, u32)]) -> crate::Result<(SymbolId, u32)> {
-        self.timeline_at(p, path).ok_or_else(|| crate::Error::Invalid("not a movie clip (only the main timeline and movie clips have playheads)".into()))
+        self.timeline_at(p, path).ok_or_else(|| {
+            crate::Error::Invalid("not a movie clip (only the main timeline and movie clips have playheads)".into())
+        })
     }
 
     pub fn set_playing(&mut self, p: &Project, path: &[(u32, u32)], playing: bool) -> crate::Result<()> {
@@ -472,7 +489,9 @@ impl Player {
         let sym = p.require_symbol(symbol)?;
         let frame = match target {
             FrameTarget::Index(i) => (*i).min(sym.length() - 1),
-            FrameTarget::Label(name) => frame_of_label(sym, name).ok_or_else(|| crate::Error::NotFound(format!("frame label {name:?}")))?,
+            FrameTarget::Label(name) => {
+                frame_of_label(sym, name).ok_or_else(|| crate::Error::NotFound(format!("frame label {name:?}")))?
+            }
         };
         if path.is_empty() {
             self.frame = frame;
@@ -496,7 +515,8 @@ impl Player {
         for depth in 0..path.len() {
             let (layer_id, track) = path[depth];
             let sym = p.symbol(symbol)?;
-            let (layer, _, _) = sym.content_layers().into_iter().find(|(l, vis, _)| l.id.0 == layer_id && *vis && l.kind != LayerKind::Guide)?;
+            let (layer, _, _) =
+                sym.content_layers().into_iter().find(|(l, vis, _)| l.id.0 == layer_id && *vis && l.kind != LayerKind::Guide)?;
             let shown: Shown = evaluate_layer_shown(layer, frame).into_iter().find(|s| s.element.track() == track)?;
             let prefix = &path[..=depth];
             let ov = self.overrides.get(prefix);
@@ -505,14 +525,17 @@ impl Player {
             let child_frame = match element.kind {
                 ElementKind::Instance { symbol: child, .. } => {
                     let child = p.symbol(child)?;
-                    Clock::frame(self, prefix, child.kind, instance_frame(child, &element.kind, &shown, frame)).min(child.length() - 1)
+                    Clock::frame(self, prefix, child.kind, instance_frame(child, &element.kind, &shown, frame))
+                        .min(child.length() - 1)
                 }
                 _ => 0,
             };
             if depth + 1 == path.len() {
                 return Some(Resolved { element, parent, child_frame, visible });
             }
-            let ElementKind::Instance { symbol: child, .. } = element.kind else { return None };
+            let ElementKind::Instance { symbol: child, .. } = element.kind else {
+                return None;
+            };
             parent = parent * element.transform.matrix();
             symbol = child;
             frame = child_frame;
@@ -539,11 +562,15 @@ impl Player {
             (p.root, self.frame)
         } else {
             match self.resolve(p, path) {
-                Some(Resolved { element: Element { kind: ElementKind::Instance { symbol, .. }, .. }, child_frame, .. }) => (symbol, child_frame),
+                Some(Resolved { element: Element { kind: ElementKind::Instance { symbol, .. }, .. }, child_frame, .. }) => {
+                    (symbol, child_frame)
+                }
                 _ => return Vec::new(),
             }
         };
-        let Some(sym) = p.symbol(symbol) else { return Vec::new() };
+        let Some(sym) = p.symbol(symbol) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for (layer, vis, _) in sym.content_layers() {
             if !vis || layer.kind == LayerKind::Guide {
@@ -574,7 +601,9 @@ impl Player {
     /// Whether stage point `pt` is over the element at `path`: on its drawn
     /// shapes (`shape`), or else anywhere in its bounds. Invisible → false.
     pub fn hit_test_point(&self, p: &Project, path: &[(u32, u32)], pt: Point, shape: bool) -> bool {
-        let Some(r) = self.resolve(p, path).filter(|r| r.visible) else { return false };
+        let Some(r) = self.resolve(p, path).filter(|r| r.visible) else {
+            return false;
+        };
         if shape {
             hits(p, &r.element.kind, &r.matrix(), pt, 0.0, r.child_frame, 0)
         } else {
@@ -717,8 +746,12 @@ fn walk(p: &Project, frame: u32, frame_of: &FrameOf, overrides: &HashMap<Instanc
             }
             for shown in evaluate_layer_shown(layer, frame) {
                 let el = &shown.element;
-                let ElementKind::Instance { symbol: child_id, .. } = el.kind else { continue };
-                let Some(child) = p.symbol(child_id) else { continue };
+                let ElementKind::Instance { symbol: child_id, .. } = el.kind else {
+                    continue;
+                };
+                let Some(child) = p.symbol(child_id) else {
+                    continue;
+                };
                 path.push((layer.id.0, el.track()));
                 let ov = overrides.get(path.as_slice());
                 let transform = ov.map_or(el.transform, |o| o.transform(&el.transform));

@@ -270,7 +270,9 @@ impl VectorPath {
     pub fn to_path(&self) -> Path {
         let mut p = Path::default();
         for sp in &self.subpaths {
-            let Some(first) = sp.nodes.first() else { continue };
+            let Some(first) = sp.nodes.first() else {
+                continue;
+            };
             p.cmds.push(PathCmd::MoveTo(first.point()));
             for i in 0..sp.segment_count() {
                 let (_, c1, c2, end, curved) = sp.segment(i);
@@ -574,7 +576,8 @@ mod tests {
         let old = before.flatten();
         for pl in v.to_path().flatten() {
             for p in pl.points.iter().step_by(7) {
-                let d = old[0].points.windows(2).map(|w| crate::geom::segment_distance(*p, w[0], w[1])).fold(f64::INFINITY, f64::min);
+                let d =
+                    old[0].points.windows(2).map(|w| crate::geom::segment_distance(*p, w[0], w[1])).fold(f64::INFINITY, f64::min);
                 assert!(d < 0.05, "{d}");
             }
         }

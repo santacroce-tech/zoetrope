@@ -4,8 +4,8 @@
 
 use crate::color::Color;
 use crate::math::Point;
-use crate::vector::VectorPath;
 use crate::model::*;
+use crate::vector::VectorPath;
 
 struct Builder {
     project: Project,
@@ -63,7 +63,17 @@ fn stops(colors: &[(f64, Color)]) -> Vec<GradientStop> {
 fn cloud() -> VectorPath {
     let p = Point::new;
     VectorPath::smooth_through(
-        &[p(-90.0, 20.0), p(-70.0, -10.0), p(-35.0, -15.0), p(-10.0, -40.0), p(30.0, -35.0), p(55.0, -12.0), p(90.0, -5.0), p(95.0, 22.0), p(0.0, 28.0)],
+        &[
+            p(-90.0, 20.0),
+            p(-70.0, -10.0),
+            p(-35.0, -15.0),
+            p(-10.0, -40.0),
+            p(30.0, -35.0),
+            p(55.0, -12.0),
+            p(90.0, -5.0),
+            p(95.0, 22.0),
+            p(0.0, 28.0),
+        ],
         true,
     )
 }
@@ -92,21 +102,46 @@ pub fn demo_project() -> Project {
         end: Point::new(0.0, 190.0),
         stops: stops(&[(0.0, Color::rgb(0x7f, 0xc4, 0xec)), (1.0, Color::rgb(0xe4, 0xf4, 0xfa))]),
     };
-    b.add(bg, "sky", Transform::at(480.0, 190.0), painted(Geometry::Rect { width: 960.0, height: 380.0 }, Some(sky_gradient), None));
-    b.add(bg, "ground", Transform::at(480.0, 460.0), shape(Geometry::Rect { width: 960.0, height: 160.0 }, Some(Color::rgb(0x8c, 0xc0, 0x6b)), None));
+    b.add(
+        bg,
+        "sky",
+        Transform::at(480.0, 190.0),
+        painted(Geometry::Rect { width: 960.0, height: 380.0 }, Some(sky_gradient), None),
+    );
+    b.add(
+        bg,
+        "ground",
+        Transform::at(480.0, 460.0),
+        shape(Geometry::Rect { width: 960.0, height: 160.0 }, Some(Color::rgb(0x8c, 0xc0, 0x6b)), None),
+    );
     let sky = b.layer(Parent::Folder(scenery), "Sky", LayerKind::Normal);
     let sun_gradient = Paint::Radial {
         center: Point::new(0.0, 0.0),
         radius: 55.0,
         focal: Some(Point::new(-15.0, -15.0)),
-        stops: stops(&[(0.0, Color::rgb(0xff, 0xf6, 0xc8)), (0.6, Color::rgb(0xff, 0xd8, 0x4d)), (1.0, Color::rgb(0xf5, 0xa6, 0x23))]),
+        stops: stops(&[
+            (0.0, Color::rgb(0xff, 0xf6, 0xc8)),
+            (0.6, Color::rgb(0xff, 0xd8, 0x4d)),
+            (1.0, Color::rgb(0xf5, 0xa6, 0x23)),
+        ]),
     };
-    b.add(sky, "sun", Transform::at(820.0, 90.0), painted(Geometry::Ellipse { width: 110.0, height: 110.0 }, Some(sun_gradient), None));
+    b.add(
+        sky,
+        "sun",
+        Transform::at(820.0, 90.0),
+        painted(Geometry::Ellipse { width: 110.0, height: 110.0 }, Some(sun_gradient), None),
+    );
     let cloud_stroke = Stroke { dash: vec![6.0, 4.0], ..Stroke::solid(2.0, Color::rgba(0x8a, 0xa8, 0xc0, 0xcc)) };
-    b.add(sky, "cloud", Transform::at(600.0, 85.0), painted(Geometry::Path(cloud()), Some(Paint::solid(Color::WHITE)), Some(cloud_stroke)));
+    b.add(
+        sky,
+        "cloud",
+        Transform::at(600.0, 85.0),
+        painted(Geometry::Path(cloud()), Some(Paint::solid(Color::WHITE)), Some(cloud_stroke)),
+    );
 
     let flowers = b.layer(Parent::Symbol(scene), "Flowers", LayerKind::Normal);
-    let place = |x, y, s: f64, rotation, skew_x| Transform { x, y, scale_x: s, scale_y: s, rotation, skew_x, ..Default::default() };
+    let place =
+        |x, y, s: f64, rotation, skew_x| Transform { x, y, scale_x: s, scale_y: s, rotation, skew_x, ..Default::default() };
     b.add(flowers, "flower A", place(220.0, 250.0, 0.8, -8.0, 0.0), ElementKind::instance(flower));
     b.add(flowers, "flower B", place(480.0, 210.0, 1.0, 0.0, 0.0), ElementKind::instance(flower));
     b.add(flowers, "flower C", place(730.0, 290.0, 0.6, 12.0, -15.0), ElementKind::instance(flower));
@@ -161,7 +196,8 @@ fn animate(b: &mut Builder, scene: SymbolId, sky: LayerId) {
         .collect();
     let layer = b.project.layer_mut(sky).unwrap();
     layer.keyframes[0].duration = TWEEN;
-    layer.keyframes[0].tween = Some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 });
+    layer.keyframes[0].tween =
+        Some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 });
     layer.keyframes.push(Keyframe::with(LENGTH - TWEEN, end));
 }
 
@@ -170,7 +206,11 @@ fn keyframes(spans: Vec<(u32, Vec<Element>, bool)>) -> Vec<Keyframe> {
     spans
         .into_iter()
         .map(|(duration, elements, tweened)| Keyframe {
-            tween: tweened.then_some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 }),
+            tween: tweened.then_some(Tween {
+                kind: TweenKind::Motion,
+                easing: Easing::Preset { name: EasePreset::EaseInOutSine },
+                rotate: 0,
+            }),
             ..Keyframe::with(duration, elements)
         })
         .collect()
@@ -221,12 +261,27 @@ fn bee_symbol(b: &mut Builder) -> SymbolId {
     let body_layer = b.layer(Parent::Symbol(bee), "Body", LayerKind::Normal);
     let yellow = Color::rgb(0xff, 0xc8, 0x2e);
     let dark = Color::rgb(0x2b, 0x22, 0x1a);
-    let body = el(b, "body", Transform::default(), shape(Geometry::Ellipse { width: 46.0, height: 30.0 }, Some(yellow), Some((2.0, dark))));
+    let body = el(
+        b,
+        "body",
+        Transform::default(),
+        shape(Geometry::Ellipse { width: 46.0, height: 30.0 }, Some(yellow), Some((2.0, dark))),
+    );
     let stripe1 = el(b, "", Transform::at(-6.0, 0.0), shape(Geometry::Rect { width: 5.0, height: 26.0 }, Some(dark), None));
     let stripe2 = el(b, "", Transform::at(6.0, 0.0), shape(Geometry::Rect { width: 5.0, height: 24.0 }, Some(dark), None));
     let wing_fill = Color::rgba(0xff, 0xff, 0xff, 0xb0);
-    let wing1 = el(b, "", Transform { x: -6.0, y: -20.0, rotation: -20.0, ..Default::default() }, shape(Geometry::Ellipse { width: 18.0, height: 26.0 }, Some(wing_fill), Some((1.0, dark))));
-    let wing2 = el(b, "", Transform { x: 8.0, y: -18.0, rotation: 25.0, ..Default::default() }, shape(Geometry::Ellipse { width: 16.0, height: 22.0 }, Some(wing_fill), Some((1.0, dark))));
+    let wing1 = el(
+        b,
+        "",
+        Transform { x: -6.0, y: -20.0, rotation: -20.0, ..Default::default() },
+        shape(Geometry::Ellipse { width: 18.0, height: 26.0 }, Some(wing_fill), Some((1.0, dark))),
+    );
+    let wing2 = el(
+        b,
+        "",
+        Transform { x: 8.0, y: -18.0, rotation: 25.0, ..Default::default() },
+        shape(Geometry::Ellipse { width: 16.0, height: 22.0 }, Some(wing_fill), Some((1.0, dark))),
+    );
     let parts = vec![body, stripe1, stripe2, wing1, wing2];
     let up: Vec<Element> = parts.iter().map(|e| copy(b, e, &|c| c.transform.y -= 14.0)).collect();
     let down: Vec<Element> = parts.iter().map(|e| copy(b, e, &|_| {})).collect();
@@ -239,16 +294,24 @@ fn button_symbol(b: &mut Builder) -> SymbolId {
     let button = b.symbol("Button", SymbolKind::Button);
     let face = b.layer(Parent::Symbol(button), "Face", LayerKind::Normal);
     let state = |b: &mut Builder, fill: Color, y: f64| {
-        let base = el(b, "", Transform::at(0.0, y), shape(Geometry::Rect { width: 140.0, height: 44.0 }, Some(fill), Some((2.0, Color::rgb(0x1d, 0x3c, 0x78)))));
-        let tri = Geometry::Path(VectorPath::polyline(&[Point::new(-8.0, -10.0), Point::new(10.0, 0.0), Point::new(-8.0, 10.0)], true));
+        let base = el(
+            b,
+            "",
+            Transform::at(0.0, y),
+            shape(Geometry::Rect { width: 140.0, height: 44.0 }, Some(fill), Some((2.0, Color::rgb(0x1d, 0x3c, 0x78)))),
+        );
+        let tri =
+            Geometry::Path(VectorPath::polyline(&[Point::new(-8.0, -10.0), Point::new(10.0, 0.0), Point::new(-8.0, 10.0)], true));
         let icon = el(b, "", Transform::at(0.0, y), shape(tri, Some(Color::WHITE), None));
         vec![base, icon]
     };
     let up_state = state(b, Color::rgb(0x3a, 0x7b, 0xd5), 0.0);
     let over_state = state(b, Color::rgb(0x5a, 0x9b, 0xf5), 0.0);
     let down_state = state(b, Color::rgb(0x25, 0x5a, 0xa8), 2.0);
-    let hit = vec![el(b, "", Transform::default(), shape(Geometry::Rect { width: 140.0, height: 44.0 }, Some(Color::BLACK), None))];
-    b.project.layer_mut(face).unwrap().keyframes = keyframes(vec![(1, up_state, false), (1, over_state, false), (1, down_state, false), (1, hit, false)]);
+    let hit =
+        vec![el(b, "", Transform::default(), shape(Geometry::Rect { width: 140.0, height: 44.0 }, Some(Color::BLACK), None))];
+    b.project.layer_mut(face).unwrap().keyframes =
+        keyframes(vec![(1, up_state, false), (1, over_state, false), (1, down_state, false), (1, hit, false)]);
     button
 }
 
@@ -269,7 +332,12 @@ fn flower_symbol(b: &mut Builder) -> SymbolId {
 
     let flower = b.symbol("Flower", SymbolKind::Graphic);
     let stem = b.layer(Parent::Symbol(flower), "Stem", LayerKind::Normal);
-    b.add(stem, "stem", Transform::at(0.0, 150.0), shape(Geometry::Rect { width: 10.0, height: 300.0 }, Some(Color::rgb(0x4c, 0x8c, 0x4a)), None));
+    b.add(
+        stem,
+        "stem",
+        Transform::at(0.0, 150.0),
+        shape(Geometry::Rect { width: 10.0, height: 300.0 }, Some(Color::rgb(0x4c, 0x8c, 0x4a)), None),
+    );
     let petals = b.layer(Parent::Symbol(flower), "Petals", LayerKind::Normal);
     for i in 0..6 {
         let t = Transform { rotation: i as f64 * 60.0, ..Default::default() };
@@ -280,11 +348,14 @@ fn flower_symbol(b: &mut Builder) -> SymbolId {
         center,
         "center",
         Transform::default(),
-        shape(Geometry::Ellipse { width: 56.0, height: 56.0 }, Some(Color::rgb(0xf5, 0xc5, 0x18)), Some((3.0, Color::rgb(0xb0, 0x7d, 0x10)))),
+        shape(
+            Geometry::Ellipse { width: 56.0, height: 56.0 },
+            Some(Color::rgb(0xf5, 0xc5, 0x18)),
+            Some((3.0, Color::rgb(0xb0, 0x7d, 0x10))),
+        ),
     );
     flower
 }
-
 
 /// A title in the bundled font and a two-second chime melody streamed in
 /// sync with the main timeline (both embedded in the project).
@@ -320,8 +391,81 @@ fn title_and_tune(b: &mut Builder, scene: SymbolId) {
         kind: AssetKind::Audio { mime: "audio/wav".into(), duration: 2.0, data: Bytes(chime_wav().into()) },
     });
     let sound = b.layer(Parent::Symbol(scene), "Sound", LayerKind::Normal);
-    b.project.layer_mut(sound).unwrap().keyframes =
-        vec![Keyframe { sound: Some(SoundRef { asset: tune, sync: SoundSync::Stream, volume: 0.8, loops: 0 }), ..Keyframe::blank(48) }];
+    b.project.layer_mut(sound).unwrap().keyframes = vec![Keyframe {
+        sound: Some(SoundRef { asset: tune, sync: SoundSync::Stream, volume: 0.8, loops: 0 }),
+        ..Keyframe::blank(48)
+    }];
+}
+
+/// A heavy scene for profiling: `count` flowers (3 levels of nesting, 8
+/// shapes each) swaying in motion tweens, `count / 4` bee movie clips and
+/// `count / 8` text labels, over a 48-frame timeline.
+pub fn stress_project(count: u32) -> Project {
+    use crate::text::{TextAlign, TextBlock};
+    let mut b = Builder {
+        project: Project {
+            next_id: 1,
+            stage: Stage { width: 1280.0, height: 720.0, background: Color::rgb(0xf4, 0xef, 0xe6), fps: 30.0 },
+            root: SymbolId(0),
+            symbols: Vec::new(),
+            assets: Vec::new(),
+            publish: None,
+        },
+    };
+    let scene = b.symbol("Stress", SymbolKind::MovieClip);
+    b.project.root = scene;
+    let flower = flower_symbol(&mut b);
+    let bee = bee_symbol(&mut b);
+    let font = default_font(&mut b);
+    let cols = (count as f64).sqrt().ceil() as u32;
+    let cell = |i: u32| (40.0 + (i % cols) as f64 * 1200.0 / cols as f64, 60.0 + (i / cols) as f64 * 640.0 / cols as f64);
+    let tween = Some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 });
+
+    let flowers = b.layer(Parent::Symbol(scene), "Flowers", LayerKind::Normal);
+    let (mut start, mut end) = (Vec::new(), Vec::new());
+    for i in 0..count {
+        let (x, y) = cell(i);
+        let e = el(
+            &mut b,
+            "",
+            Transform { x, y, scale_x: 0.25, scale_y: 0.25, rotation: -10.0, ..Default::default() },
+            ElementKind::instance(flower),
+        );
+        end.push(copy(&mut b, &e, &|c| c.transform.rotation = 10.0));
+        start.push(e);
+    }
+    b.project.layer_mut(flowers).unwrap().keyframes =
+        vec![Keyframe { tween: tween.clone(), ..Keyframe::with(24, start) }, Keyframe::with(24, end)];
+
+    let bees = b.layer(Parent::Symbol(scene), "Bees", LayerKind::Normal);
+    let list: Vec<Element> = (0..count / 4)
+        .map(|i| {
+            let (x, y) = cell(i * 4 + 1);
+            el(&mut b, "", Transform::at(x + 20.0, y - 20.0), ElementKind::instance(bee))
+        })
+        .collect();
+    b.project.layer_mut(bees).unwrap().keyframes = vec![Keyframe::with(48, list)];
+
+    let labels = b.layer(Parent::Symbol(scene), "Labels", LayerKind::Normal);
+    let list: Vec<Element> = (0..count / 8)
+        .map(|i| {
+            let (x, y) = cell(i * 8 + 2);
+            let t = TextBlock {
+                text: format!("Flower #{i}"),
+                font,
+                size: 14.0,
+                fill: Paint::solid(Color::rgb(0x2b, 0x3a, 0x67)),
+                align: TextAlign::Left,
+                letter_spacing: 0.0,
+                line_height: 1.25,
+                width: None,
+            };
+            el(&mut b, "", Transform::at(x, y + 30.0), ElementKind::Text(t))
+        })
+        .collect();
+    b.project.layer_mut(labels).unwrap().keyframes = vec![Keyframe::with(48, list)];
+    debug_assert!(b.project.validate().is_ok());
+    b.project
 }
 
 /// Embeds the bundled font.
@@ -383,8 +527,14 @@ pub fn game_project() -> Project {
         end: Point::new(0.0, 270.0),
         stops: stops(&[(0.0, Color::rgb(0x7f, 0xc4, 0xec)), (1.0, Color::rgb(0xe4, 0xf4, 0xfa))]),
     };
-    let sky = el(&mut b, "sky", Transform::at(480.0, 270.0), painted(Geometry::Rect { width: 960.0, height: 540.0 }, Some(sky), None));
-    let ground = el(&mut b, "ground", Transform::at(480.0, 515.0), shape(Geometry::Rect { width: 960.0, height: 50.0 }, Some(Color::rgb(0x8c, 0xc0, 0x6b)), None));
+    let sky =
+        el(&mut b, "sky", Transform::at(480.0, 270.0), painted(Geometry::Rect { width: 960.0, height: 540.0 }, Some(sky), None));
+    let ground = el(
+        &mut b,
+        "ground",
+        Transform::at(480.0, 515.0),
+        shape(Geometry::Rect { width: 960.0, height: 50.0 }, Some(Color::rgb(0x8c, 0xc0, 0x6b)), None),
+    );
     b.project.layer_mut(bg).unwrap().keyframes = vec![Keyframe::with(2, vec![sky, ground])];
 
     let small = Transform { x: 600.0, y: 300.0, scale_x: 0.45, scale_y: 0.45, ..Default::default() };
@@ -399,7 +549,12 @@ pub fn game_project() -> Project {
     let hud = b.layer(Parent::Symbol(scene), "HUD", LayerKind::Normal);
     let score = el(&mut b, "scoreText", Transform::at(24.0, 16.0), text("Score: 0", 30.0, ink, TextAlign::Left, None));
     let time = el(&mut b, "timeText", Transform::at(736.0, 16.0), text("Time: 15", 30.0, ink, TextAlign::Right, Some(200.0)));
-    let hint = el(&mut b, "", Transform::at(280.0, 22.0), text("Arrow keys: fly · catch the flowers", 20.0, ink, TextAlign::Center, Some(400.0)));
+    let hint = el(
+        &mut b,
+        "",
+        Transform::at(280.0, 22.0),
+        text("Arrow keys: fly · catch the flowers", 20.0, ink, TextAlign::Center, Some(400.0)),
+    );
     let restart = el(&mut b, "restartButton", Transform::at(860.0, 500.0), ElementKind::instance(button));
     let label = el(&mut b, "", Transform::at(660.0, 488.0), text("Restart", 22.0, ink, TextAlign::Right, Some(120.0)));
     b.project.layer_mut(hud).unwrap().keyframes = vec![Keyframe::with(2, vec![score, time, hint, restart, label])];
