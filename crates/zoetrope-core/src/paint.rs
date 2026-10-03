@@ -137,11 +137,9 @@ impl PaintStyle {
         let c = bounds.center();
         match self {
             PaintStyle::Solid { color } => Paint::Solid { color: *color },
-            PaintStyle::Linear { stops } => Paint::Linear {
-                start: Point::new(bounds.min.x, c.y),
-                end: Point::new(bounds.max.x, c.y),
-                stops: stops.clone(),
-            },
+            PaintStyle::Linear { stops } => {
+                Paint::Linear { start: Point::new(bounds.min.x, c.y), end: Point::new(bounds.max.x, c.y), stops: stops.clone() }
+            }
             PaintStyle::Radial { stops } => Paint::Radial {
                 center: c,
                 radius: (bounds.width().max(bounds.height()) / 2.0).max(1e-3),

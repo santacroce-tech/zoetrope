@@ -145,6 +145,7 @@ export class Runtime {
   }
 
   private attachKeys() {
+    if (!this.opts.keyTarget && typeof window === "undefined") return; // no keyboard (tests)
     const target = this.opts.keyTarget ?? window;
     const key = (type: "keyDown" | "keyUp") => (e: Event) => {
       const k = e as KeyboardEvent;
@@ -160,18 +161,19 @@ export class Runtime {
     const blur = () => this.scripts?.dispatch({ type: "blur" });
     target.addEventListener("keydown", down);
     target.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
+    const win = typeof window === "undefined" ? null : window;
+    win?.addEventListener("blur", blur);
     this.detach = () => {
       target.removeEventListener("keydown", down);
       target.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
+      win?.removeEventListener("blur", blur);
     };
   }
 
   /** Ends the session (sandbox state is discarded). Returns the main timeline frame reached. */
   stop(): number {
     this.running = false;
-    cancelAnimationFrame(this.raf);
+    if (this.raf) cancelAnimationFrame(this.raf);
     this.detach?.();
     this.audio.stopAll();
     this.scripts?.dispose();

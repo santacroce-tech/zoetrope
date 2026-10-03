@@ -284,19 +284,49 @@ fn create_shapes_on_active_layer_respecting_locks() {
     let mut doc = Document::new(demo_project());
     let layer = layer_named(&doc.project, "Flowers");
     let style = style(Some(Color::rgb(1, 2, 3)), Some((Color::BLACK, 4.0)));
-    let id = ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(10.0, 10.0), Point::new(110.0, 60.0), Modifiers::default(), &OPTS, &style, 0)
-        .unwrap()
-        .unwrap();
+    let id = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Rect,
+        Point::new(10.0, 10.0),
+        Point::new(110.0, 60.0),
+        Modifiers::default(),
+        &OPTS,
+        &style,
+        0,
+    )
+    .unwrap()
+    .unwrap();
     let e = doc.project.element(id).unwrap();
     assert_eq!((e.transform.x, e.transform.y), (60.0, 35.0));
     let b = element_bounds(&doc.project, e, 0).unwrap();
     assert_eq!((b.width(), b.height()), (104.0, 54.0), "stroke half-width included");
-    assert!(ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(0.0, 0.0), Modifiers::default(), &OPTS, &style, 0)
-        .unwrap()
-        .is_none());
+    assert!(ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Rect,
+        Point::new(0.0, 0.0),
+        Point::new(0.0, 0.0),
+        Modifiers::default(),
+        &OPTS,
+        &style,
+        0
+    )
+    .unwrap()
+    .is_none());
 
     ops::set_layer_props(&mut doc, layer, &LayerPatch { locked: Some(true), ..Default::default() }).unwrap();
-    let err = ops::create_shape(&mut doc, layer, ShapeTool::Line, Point::new(0.0, 0.0), Point::new(50.0, 0.0), Modifiers::default(), &OPTS, &style, 0);
+    let err = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Line,
+        Point::new(0.0, 0.0),
+        Point::new(50.0, 0.0),
+        Modifiers::default(),
+        &OPTS,
+        &style,
+        0,
+    );
     assert!(matches!(err, Err(Error::Invalid(m)) if m.contains("locked")));
 }
 
@@ -306,9 +336,19 @@ fn align_and_distribute() {
     let layer = layer_named(&doc.project, "Flowers");
     let style = style(Some(Color::BLACK), None);
     let mk = |doc: &mut Document, x0: f64, y0: f64, w: f64| {
-        ops::create_shape(doc, layer, ShapeTool::Rect, Point::new(x0, y0), Point::new(x0 + w, y0 + 20.0), Modifiers::default(), &OPTS, &style, 0)
-            .unwrap()
-            .unwrap()
+        ops::create_shape(
+            doc,
+            layer,
+            ShapeTool::Rect,
+            Point::new(x0, y0),
+            Point::new(x0 + w, y0 + 20.0),
+            Modifiers::default(),
+            &OPTS,
+            &style,
+            0,
+        )
+        .unwrap()
+        .unwrap()
     };
     let a = mk(&mut doc, 0.0, 0.0, 10.0);
     let b = mk(&mut doc, 50.0, 30.0, 30.0);
@@ -365,7 +405,12 @@ fn layer_tree_ops() {
     assert!(ops::move_layer(&mut doc, folder, Some(folder), 0).is_err(), "no folder into itself");
     ops::move_layer(&mut doc, flowers, Some(scenery), 0).unwrap();
     assert!(doc.project.layer_is_within(flowers, scenery));
-    ops::set_layer_props(&mut doc, new, &LayerPatch { name: Some("Props".into()), kind: Some(LayerKind::Guide), ..Default::default() }).unwrap();
+    ops::set_layer_props(
+        &mut doc,
+        new,
+        &LayerPatch { name: Some("Props".into()), kind: Some(LayerKind::Guide), ..Default::default() },
+    )
+    .unwrap();
     assert!(ops::set_layer_props(&mut doc, folder, &LayerPatch { kind: Some(LayerKind::Normal), ..Default::default() }).is_err());
     ops::delete_layer(&mut doc, scenery).unwrap();
     assert!(doc.project.element(find(&original, "sun")).is_none(), "folder deletion takes contents");
@@ -415,21 +460,64 @@ fn gate_static_multilayer_scene_round_trips_and_undoes() {
     let style = style(Some(Color::rgb(200, 40, 40)), Some((Color::BLACK, 2.0)));
 
     let top = ops::add_layer(&mut doc, root, None, LayerKind::Normal).unwrap();
-    let r = ops::create_shape(&mut doc, top, ShapeTool::Rect, Point::new(100.0, 100.0), Point::new(200.0, 160.0), Modifiers::default(), &OPTS, &style, 0).unwrap().unwrap();
-    let e = ops::create_shape(&mut doc, top, ShapeTool::Ellipse, Point::new(300.0, 100.0), Point::new(380.0, 200.0), Modifiers::default(), &OPTS, &style, 0).unwrap().unwrap();
-    let l = ops::create_shape(&mut doc, top, ShapeTool::Line, Point::new(50.0, 300.0), Point::new(250.0, 330.0), Modifiers { shift: true, alt: false }, &OPTS, &style, 0).unwrap().unwrap();
+    let r = ops::create_shape(
+        &mut doc,
+        top,
+        ShapeTool::Rect,
+        Point::new(100.0, 100.0),
+        Point::new(200.0, 160.0),
+        Modifiers::default(),
+        &OPTS,
+        &style,
+        0,
+    )
+    .unwrap()
+    .unwrap();
+    let e = ops::create_shape(
+        &mut doc,
+        top,
+        ShapeTool::Ellipse,
+        Point::new(300.0, 100.0),
+        Point::new(380.0, 200.0),
+        Modifiers::default(),
+        &OPTS,
+        &style,
+        0,
+    )
+    .unwrap()
+    .unwrap();
+    let l = ops::create_shape(
+        &mut doc,
+        top,
+        ShapeTool::Line,
+        Point::new(50.0, 300.0),
+        Point::new(250.0, 330.0),
+        Modifiers { shift: true, alt: false },
+        &OPTS,
+        &style,
+        0,
+    )
+    .unwrap()
+    .unwrap();
 
     // Drag-scale the rect, rotate the ellipse, skew the line.
-    let s = TransformSession::begin(&doc.project, scope, &[r], DragMode::Scale { handle: Handle::Se }, Point::new(200.0, 160.0)).unwrap();
+    let s = TransformSession::begin(&doc.project, scope, &[r], DragMode::Scale { handle: Handle::Se }, Point::new(200.0, 160.0))
+        .unwrap();
     s.update(&mut doc.project, Point::new(250.0, 190.0), Modifiers::default(), &SnapConfig::default());
     s.commit(&mut doc).unwrap();
     let s = TransformSession::begin(&doc.project, scope, &[e], DragMode::Rotate, Point::new(400.0, 150.0)).unwrap();
     s.update(&mut doc.project, Point::new(340.0, 210.0), Modifiers { shift: true, alt: false }, &SnapConfig::default());
     s.commit(&mut doc).unwrap();
-    let s = TransformSession::begin(&doc.project, scope, &[l], DragMode::Skew { handle: Handle::E }, Point::new(250.0, 300.0)).unwrap();
+    let s = TransformSession::begin(&doc.project, scope, &[l], DragMode::Skew { handle: Handle::E }, Point::new(250.0, 300.0))
+        .unwrap();
     s.update(&mut doc.project, Point::new(250.0, 320.0), Modifiers::default(), &SnapConfig::default());
     s.commit(&mut doc).unwrap();
-    ops::patch_elements(&mut doc, &[r, e], &json!({"opacity": 0.6, "blend": "multiply", "tint": {"color": "#0000ff", "amount": 0.3}})).unwrap();
+    ops::patch_elements(
+        &mut doc,
+        &[r, e],
+        &json!({"opacity": 0.6, "blend": "multiply", "tint": {"color": "#0000ff", "amount": 0.3}}),
+    )
+    .unwrap();
     ops::patch_element(&mut doc, r, &json!({"transform": {"pivotX": -50, "pivotY": -30}})).unwrap();
     ops::set_stage(&mut doc, Stage { width: 800.0, height: 600.0, background: Color::rgb(10, 10, 10), fps: 30.0 }).unwrap();
 
@@ -570,7 +658,9 @@ fn paint_styles_fit_gradients_to_shapes() {
     let ElementKind::Shape(s) = &doc.project.element(ground).unwrap().kind else { panic!() };
     assert!(matches!(s.stroke.as_ref().unwrap().paint, Paint::Radial { radius, .. } if radius == 480.0));
     let horizon = find(&doc.project, "horizon");
-    assert!(ops::set_paint_style(&mut doc, &[horizon], PaintPart::Fill, Some(&PaintStyle::Solid { color: Color::BLACK })).is_err());
+    assert!(
+        ops::set_paint_style(&mut doc, &[horizon], PaintPart::Fill, Some(&PaintStyle::Solid { color: Color::BLACK })).is_err()
+    );
     doc.undo().unwrap();
     doc.undo().unwrap();
     assert_eq!(Project { next_id: demo_project().next_id, ..doc.project.clone() }, demo_project());
@@ -632,9 +722,18 @@ fn gate_vector_paths_with_gradients_round_trip_and_undo() {
     let m = Modifiers::default();
     let grad = ShapeStyle {
         fill: Some(PaintStyle::Radial {
-            stops: vec![GradientStop { offset: 0.0, color: Color::WHITE }, GradientStop { offset: 1.0, color: Color::rgb(30, 60, 200) }],
+            stops: vec![
+                GradientStop { offset: 0.0, color: Color::WHITE },
+                GradientStop { offset: 1.0, color: Color::rgb(30, 60, 200) },
+            ],
         }),
-        stroke: Some(StrokeStyle { color: Color::BLACK, width: 3.0, cap: LineCap::Square, join: LineJoin::Bevel, dash: vec![8.0, 4.0] }),
+        stroke: Some(StrokeStyle {
+            color: Color::BLACK,
+            width: 3.0,
+            cap: LineCap::Square,
+            join: LineJoin::Bevel,
+            dash: vec![8.0, 4.0],
+        }),
     };
 
     // 1. Pen: a closed shape with one smooth anchor.
@@ -654,26 +753,61 @@ fn gate_vector_paths_with_gradients_round_trip_and_undo() {
     let pencil_id = ops::create_freehand(&mut doc, layer, &wave, true, 1.5, &grad, 0).unwrap().unwrap();
 
     // 3. Star with the polygon tool.
-    let star_id = ops::create_shape(&mut doc, layer, ShapeTool::Polygon, Point::new(700.0, 400.0), Point::new(700.0, 340.0), m,
-        &ShapeOptions { sides: 5, star: Some(0.45) }, &grad, 0).unwrap().unwrap();
+    let star_id = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Polygon,
+        Point::new(700.0, 400.0),
+        Point::new(700.0, 340.0),
+        m,
+        &ShapeOptions { sides: 5, star: Some(0.45) },
+        &grad,
+        0,
+    )
+    .unwrap()
+    .unwrap();
 
     // 4. Subselection: drag an anchor; drag a handle with Alt (break tangent).
-    let s = EditSession::begin(&doc.project, scope, pen_id, EditTarget::Anchors { nodes: vec![NodeRef { subpath: 0, node: 0 }] }, Point::new(100.0, 100.0)).unwrap();
+    let s = EditSession::begin(
+        &doc.project,
+        scope,
+        pen_id,
+        EditTarget::Anchors { nodes: vec![NodeRef { subpath: 0, node: 0 }] },
+        Point::new(100.0, 100.0),
+    )
+    .unwrap();
     s.update(&mut doc.project, Point::new(80.0, 90.0), m).unwrap();
     s.commit(&mut doc).unwrap();
-    let s = EditSession::begin(&doc.project, scope, pen_id, EditTarget::Handle { node: NodeRef { subpath: 0, node: 1 }, side: HandleSide::Out }, Point::new(240.0, 140.0)).unwrap();
+    let s = EditSession::begin(
+        &doc.project,
+        scope,
+        pen_id,
+        EditTarget::Handle { node: NodeRef { subpath: 0, node: 1 }, side: HandleSide::Out },
+        Point::new(240.0, 140.0),
+    )
+    .unwrap();
     s.update(&mut doc.project, Point::new(260.0, 100.0), Modifiers { shift: false, alt: true }).unwrap();
     s.commit(&mut doc).unwrap();
 
     // 5. Gradient tool: move the star's radial focal point.
-    let s = EditSession::begin(&doc.project, scope, star_id, EditTarget::Gradient { part: PaintPart::Fill, handle: GradientHandle::Focal }, Point::new(700.0, 400.0)).unwrap();
+    let s = EditSession::begin(
+        &doc.project,
+        scope,
+        star_id,
+        EditTarget::Gradient { part: PaintPart::Fill, handle: GradientHandle::Focal },
+        Point::new(700.0, 400.0),
+    )
+    .unwrap();
     s.update(&mut doc.project, Point::new(690.0, 385.0), m).unwrap();
     s.commit(&mut doc).unwrap();
 
     // 6. Even-odd fill rule on the star via a property patch.
     ops::patch_element(&mut doc, star_id, &json!({"fillRule": "evenOdd"})).unwrap();
 
-    let shape = |id| match &doc.project.element(id).unwrap().kind { ElementKind::Shape(s) => s.clone(), _ => panic!() };
+    let shape = |id| match &doc.project.element(id).unwrap().kind {
+        ElementKind::Shape(s) => s.clone(),
+        _ => panic!(),
+    };
     let pen_shape = shape(pen_id);
     assert!(matches!(pen_shape.fill, Some(Paint::Radial { .. })));
     let Geometry::Path(v) = &pen_shape.geometry else { panic!() };
@@ -683,8 +817,12 @@ fn gate_vector_paths_with_gradients_round_trip_and_undo() {
 
     // Rendering: gradients and stroke styles reach the backend.
     let ops_ = record(&doc.project);
-    assert!(ops_.iter().any(|o| matches!(o, DrawOp::Fill { paint: Paint::Radial { focal: Some(_), .. }, rule: FillRule::EvenOdd, .. })));
-    assert!(ops_.iter().any(|o| matches!(o, DrawOp::Stroke { stroke, .. } if stroke.cap == LineCap::Square && stroke.join == LineJoin::Bevel)));
+    assert!(ops_
+        .iter()
+        .any(|o| matches!(o, DrawOp::Fill { paint: Paint::Radial { focal: Some(_), .. }, rule: FillRule::EvenOdd, .. })));
+    assert!(ops_
+        .iter()
+        .any(|o| matches!(o, DrawOp::Stroke { stroke, .. } if stroke.cap == LineCap::Square && stroke.join == LineJoin::Bevel)));
 
     // Round-trip and undo.
     let json = save_to_string(&doc.project);
@@ -708,12 +846,18 @@ fn stroke_patches_merge_per_shape() {
     let mut doc = Document::new(demo_project());
     let (center, cloud) = (find(&doc.project, "center"), find(&doc.project, "cloud"));
     ops::patch_elements(&mut doc, &[center, cloud], &json!({"stroke": {"width": 5, "cap": "square"}})).unwrap();
-    let stroke = |id| match &doc.project.element(id).unwrap().kind { ElementKind::Shape(s) => s.stroke.clone().unwrap(), _ => panic!() };
+    let stroke = |id| match &doc.project.element(id).unwrap().kind {
+        ElementKind::Shape(s) => s.stroke.clone().unwrap(),
+        _ => panic!(),
+    };
     assert_eq!((stroke(center).width, stroke(center).cap), (5.0, LineCap::Square));
     assert_eq!(stroke(center).paint, Paint::solid(Color::rgb(0xb0, 0x7d, 0x10)), "own paint kept");
     assert_eq!(stroke(cloud).dash, vec![6.0, 4.0], "own dash kept");
     let ground = find(&doc.project, "ground");
-    assert!(ops::patch_element(&mut doc, ground, &json!({"stroke": {"width": 5}})).is_err(), "no stroke to merge into: needs a full stroke");
+    assert!(
+        ops::patch_element(&mut doc, ground, &json!({"stroke": {"width": 5}})).is_err(),
+        "no stroke to merge into: needs a full stroke"
+    );
 }
 
 // ---------- Phase 4: timeline & tweening ----------
@@ -751,7 +895,7 @@ fn scrubbing_renders_are_deterministic_and_distinct() {
     let p = demo_project();
     let at = |f: u32| {
         let mut r = RecordingRenderer::default();
-        render_frame(&p, f, RenderOptions::player(Matrix::IDENTITY), &mut r);
+        render_frame(&p, f % 48, RenderOptions::player(Matrix::IDENTITY), &mut r);
         r.ops
     };
     for f in [0, 7, 18, 35, 36, 47] {
@@ -845,9 +989,19 @@ fn tweened_frames_block_direct_manipulation() {
     // Drawing on a frame past a layer's end extends it with a keyframe.
     let flowers = layer_named(&doc.project, "Flowers");
     let st = style(Some(Color::BLACK), None);
-    let id = ops::create_shape(&mut doc, flowers, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(10.0, 10.0), Modifiers::default(), &OPTS, &st, 60)
-        .unwrap()
-        .unwrap();
+    let id = ops::create_shape(
+        &mut doc,
+        flowers,
+        ShapeTool::Rect,
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 10.0),
+        Modifiers::default(),
+        &OPTS,
+        &st,
+        60,
+    )
+    .unwrap()
+    .unwrap();
     let l = doc.project.layer(flowers).unwrap();
     assert_eq!(l.keyframes.iter().map(|k| k.duration).collect::<Vec<_>>(), vec![60, 1]);
     assert_eq!(doc.project.locate(id).unwrap().keyframe, 1);
@@ -861,23 +1015,44 @@ fn shape_tween_morphs_geometry_and_paint() {
     let root = doc.project.root;
     let layer = ops::add_layer(&mut doc, root, None, LayerKind::Normal).unwrap();
     let red = style(Some(Color::rgb(255, 0, 0)), None);
-    let a = ops::create_shape(&mut doc, layer, ShapeTool::Rect, Point::new(0.0, 0.0), Point::new(100.0, 100.0), Modifiers::default(), &OPTS, &red, 0)
-        .unwrap()
-        .unwrap();
+    let a = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Rect,
+        Point::new(0.0, 0.0),
+        Point::new(100.0, 100.0),
+        Modifiers::default(),
+        &OPTS,
+        &red,
+        0,
+    )
+    .unwrap()
+    .unwrap();
     ops::insert_keyframe(&mut doc, &[layer], 10, false).unwrap();
     // Turn the copy at frame 10 into a blue star.
     let copy = doc.project.layer(layer).unwrap().keyframes[1].elements[0].id;
     let star = VectorPath::polystar(5, 50.0, Some(0.5), 0.0);
-    ops::patch_element(&mut doc, copy, &json!({"geometry": Geometry::Path(star), "fill": {"type": "solid", "color": "#0000ff"}})).unwrap();
+    ops::patch_element(&mut doc, copy, &json!({"geometry": Geometry::Path(star), "fill": {"type": "solid", "color": "#0000ff"}}))
+        .unwrap();
     ops::set_tween(&mut doc, &[layer], 0, Some(Tween { kind: TweenKind::Shape, easing: Easing::Linear, rotate: 0 })).unwrap();
-    let mid = zoetrope_core::query::scene_elements(&doc.project, doc.project.root, 5).into_iter().find(|se| se.element.id == a).unwrap().element.into_owned();
+    let mid = zoetrope_core::query::scene_elements(&doc.project, doc.project.root, 5)
+        .into_iter()
+        .find(|se| se.element.id == a)
+        .unwrap()
+        .element
+        .into_owned();
     let ElementKind::Shape(s) = &mid.kind else { panic!() };
     let Geometry::Path(v) = &s.geometry else { panic!("morphed to a path") };
     assert_eq!(v.subpaths[0].nodes.len(), 10, "rect grown to the star's node count");
     assert_eq!(s.fill, Some(Paint::solid(Color::rgb(128, 0, 128))));
     // A motion tween leaves the geometry alone.
     ops::set_tween(&mut doc, &[layer], 0, Some(Tween { kind: TweenKind::Motion, easing: Easing::Linear, rotate: 0 })).unwrap();
-    let mid = zoetrope_core::query::scene_elements(&doc.project, doc.project.root, 5).into_iter().find(|se| se.element.id == a).unwrap().element.into_owned();
+    let mid = zoetrope_core::query::scene_elements(&doc.project, doc.project.root, 5)
+        .into_iter()
+        .find(|se| se.element.id == a)
+        .unwrap()
+        .element
+        .into_owned();
     let ElementKind::Shape(s) = &mid.kind else { panic!() };
     assert!(matches!(s.geometry, Geometry::Rect { .. }));
 }
@@ -886,9 +1061,13 @@ fn shape_tween_morphs_geometry_and_paint() {
 fn onion_skin_draws_neighbors_faded() {
     let p = demo_project();
     let mut r = RecordingRenderer::default();
-    let opts = RenderOptions { onion: Some(zoetrope_core::render::Onion { before: 2, after: 1, alpha: 0.4 }), ..RenderOptions::player(Matrix::IDENTITY) };
+    let opts = RenderOptions {
+        onion: Some(zoetrope_core::render::Onion { before: 2, after: 1, alpha: 0.4 }),
+        ..RenderOptions::player(Matrix::IDENTITY)
+    };
     render_frame(&p, 10, opts, &mut r);
-    let groups: Vec<f64> = r.ops.iter().filter_map(|o| if let DrawOp::BeginGroup { alpha, .. } = o { Some(*alpha) } else { None }).collect();
+    let groups: Vec<f64> =
+        r.ops.iter().filter_map(|o| if let DrawOp::BeginGroup { alpha, .. } = o { Some(*alpha) } else { None }).collect();
     assert_eq!(groups, vec![0.2, 0.4, 0.4], "two before (farther = fainter), one after");
     // At frame 0 there is nothing before.
     let mut r0 = RecordingRenderer::default();
@@ -940,9 +1119,19 @@ fn gate_tweened_animation_round_trips_and_undoes() {
     let root = doc.project.root;
     let layer = ops::add_layer(&mut doc, root, None, LayerKind::Normal).unwrap();
     let st = style(Some(Color::rgb(200, 30, 90)), Some((Color::BLACK, 2.0)));
-    let ball = ops::create_shape(&mut doc, layer, ShapeTool::Ellipse, Point::new(40.0, 40.0), Point::new(100.0, 100.0), Modifiers::default(), &OPTS, &st, 0)
-        .unwrap()
-        .unwrap();
+    let ball = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Ellipse,
+        Point::new(40.0, 40.0),
+        Point::new(100.0, 100.0),
+        Modifiers::default(),
+        &OPTS,
+        &st,
+        0,
+    )
+    .unwrap()
+    .unwrap();
     ops::insert_keyframe(&mut doc, &[layer], 24, false).unwrap();
     // Edit the end keyframe (scope at frame 24): move and spin the ball.
     let end = doc.project.layer(layer).unwrap().keyframes[1].elements[0].id;
@@ -955,7 +1144,12 @@ fn gate_tweened_animation_round_trips_and_undoes() {
     ops::set_tween(&mut doc, &[layer], 0, Some(Tween { kind: TweenKind::Motion, easing, rotate: 2 })).unwrap();
 
     let at = |p: &Project, f: u32| -> Element {
-        zoetrope_core::query::scene_elements(p, p.root, f).into_iter().find(|se| se.element.id == ball).unwrap().element.into_owned()
+        zoetrope_core::query::scene_elements(p, p.root, f)
+            .into_iter()
+            .find(|se| se.element.id == ball)
+            .unwrap()
+            .element
+            .into_owned()
     };
     let e12 = at(&doc.project, 12);
     let k = easing.apply(0.5);
@@ -1005,7 +1199,12 @@ fn record_stateless(p: &Project, f: u32) -> Vec<DrawOp> {
 
 fn bee_frames(p: &Project, pl: &Player) -> Vec<u32> {
     let bees = layer_named(p, "Bees").0;
-    let mut v: Vec<(u32, u32)> = pl.clip_frames().iter().filter(|(path, _)| path.len() == 1 && path[0].0 == bees).map(|(path, f)| (path[0].1, *f)).collect();
+    let mut v: Vec<(u32, u32)> = pl
+        .clip_frames()
+        .iter()
+        .filter(|(path, _)| path.len() == 1 && path[0].0 == bees)
+        .map(|(path, f)| (path[0].1, *f))
+        .collect();
     v.sort();
     v.into_iter().map(|(_, f)| f).collect()
 }
@@ -1146,7 +1345,12 @@ fn edit_in_place_view_dims_context_and_skips_the_instance() {
     let m = p.element(b).unwrap().transform.matrix();
     let view = EditView { path: &[b], root_frame: 0, symbol: flower, frame: 0, matrix: m, context_alpha: 0.3 };
     let mut r = RecordingRenderer::default();
-    render_editing(&p, &view, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: true, onion: None }, &mut r);
+    render_editing(
+        &p,
+        &view,
+        RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: true, onion: None },
+        &mut r,
+    );
     assert!(matches!(r.ops[1], DrawOp::BeginGroup { alpha, .. } if alpha == 0.3));
     let end = r.ops.iter().position(|o| *o == DrawOp::EndGroup).unwrap();
     // Context: everything but flower B (8 fills fewer); then flower B's symbol at full strength.
@@ -1236,7 +1440,9 @@ fn text_embeds_its_font_and_renders_as_paths() {
 fn fonts_import_and_validate() {
     let mut doc = Document::new(demo_project());
     let id = ops::import_font(&mut doc, "copy.ttf", DEFAULT_FONT).unwrap();
-    assert!(matches!(&doc.project.asset(id).unwrap().kind, zoetrope_core::asset::AssetKind::Font { family, .. } if family == "Zoetrope Sans"));
+    assert!(
+        matches!(&doc.project.asset(id).unwrap().kind, zoetrope_core::asset::AssetKind::Font { family, .. } if family == "Zoetrope Sans")
+    );
     assert!(ops::import_font(&mut doc, "junk.ttf", b"nope").is_err());
     let style = TextStyle { font: Some(id), ..Default::default() };
     let layer = layer_named(&doc.project, "Flowers");
@@ -1264,9 +1470,16 @@ fn audio_import_sound_cues_and_validation() {
     let bees = layer_named(&doc.project, "Bees");
     // An event sound on the keyframe starting at frame 8.
     ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: clip, sync: SoundSync::Event, volume: 0.5, loops: 1 })).unwrap();
-    assert!(ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: clip, sync: SoundSync::Event, volume: 2.0, loops: 0 })).is_err());
+    assert!(ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: clip, sync: SoundSync::Event, volume: 2.0, loops: 0 }))
+        .is_err());
     let sun_id = find(&doc.project, "sun").0;
-    assert!(ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: AssetId(sun_id), sync: SoundSync::Event, volume: 1.0, loops: 0 })).is_err());
+    assert!(ops::set_sound(
+        &mut doc,
+        &[bees],
+        8,
+        Some(SoundRef { asset: AssetId(sun_id), sync: SoundSync::Event, volume: 1.0, loops: 0 })
+    )
+    .is_err());
     // The clip can't be removed while a keyframe uses it.
     assert!(doc.execute("bad", vec![Edit::RemoveAsset { asset: clip }]).is_err());
 
@@ -1349,7 +1562,10 @@ fn entering_frames_queues_frame_and_symbol_scripts() {
     // ...unless stopped themselves.
     script_call(&p, &mut pl, json!({"op": "stop", "path": bee}));
     pl.tick(&p);
-    assert_eq!(pl.timeline(&p, &bee).unwrap(), zoetrope_core::player::TimelineState { frame: bee_frame + 1, length: 13, playing: false });
+    assert_eq!(
+        pl.timeline(&p, &bee).unwrap(),
+        zoetrope_core::player::TimelineState { frame: bee_frame + 1, length: 13, playing: false }
+    );
 
     // Jumping by label enters the frame: its script is due, and the bee and
     // flower, which only exist on frame 1, leave the stage.
@@ -1380,7 +1596,10 @@ fn scripted_properties_override_the_timeline() {
     let bee = pl.child_named(&p, &[], "bee").unwrap();
     let flower = pl.child_named(&p, &[], "flower").unwrap();
     let props = script_call(&p, &mut pl, json!({"op": "get", "path": bee}));
-    assert_eq!((props["kind"].as_str(), props["x"].as_f64(), props["symbol"].as_str()), (Some("movieClip"), Some(140.0), Some("Bee")));
+    assert_eq!(
+        (props["kind"].as_str(), props["x"].as_f64(), props["symbol"].as_str()),
+        (Some("movieClip"), Some(140.0), Some("Bee"))
+    );
     assert!(!pl.hit_test_object(&p, &bee, &flower));
 
     // Move the bee onto the flower: rendering, bounds and collisions follow.
@@ -1405,8 +1624,14 @@ fn scripted_properties_override_the_timeline() {
     let score = pl.child_named(&p, &[], "scoreText").unwrap();
     script_call(&p, &mut pl, json!({"op": "set", "path": score, "props": {"text": "Score: 42"}}));
     assert_eq!(script_call(&p, &mut pl, json!({"op": "get", "path": score}))["text"], "Score: 42");
-    assert!(script::call(&p, &mut pl, Call::Set { path: flower.clone(), props: Override { text: Some("x".into()), ..Default::default() } }).is_err());
-    assert!(script::call(&p, &mut pl, Call::Set { path: flower, props: Override { x: Some(f64::NAN), ..Default::default() } }).is_err());
+    assert!(script::call(
+        &p,
+        &mut pl,
+        Call::Set { path: flower.clone(), props: Override { text: Some("x".into()), ..Default::default() } }
+    )
+    .is_err());
+    assert!(script::call(&p, &mut pl, Call::Set { path: flower, props: Override { x: Some(f64::NAN), ..Default::default() } })
+        .is_err());
 
     let names: Vec<String> = script_call(&p, &mut pl, json!({"op": "children", "path": []}))
         .as_array()
@@ -1432,7 +1657,9 @@ fn scripted_buttons_move_their_hit_area() {
     assert!(!pl.over_button());
     pl.pointer(&p, Some(Point::new(100.0, 500.0)), true);
     let events = pl.pointer(&p, Some(Point::new(100.0, 500.0)), false);
-    assert!(matches!(&events[..], [PlayerEvent::Release { name, .. }, PlayerEvent::Click { path, .. }] if name == "restartButton" && *path == button));
+    assert!(
+        matches!(&events[..], [PlayerEvent::Release { name, .. }, PlayerEvent::Click { path, .. }] if name == "restartButton" && *path == button)
+    );
 }
 
 #[test]
@@ -1546,4 +1773,206 @@ fn v5_files_load_as_v6() {
     let mut v: Value = serde_json::from_str(&save_to_string(&game_project())).unwrap();
     v["schemaVersion"] = json!(5);
     assert_eq!(load_from_str(&v.to_string()).unwrap(), game_project());
+}
+
+// ---------------------------------------------------------------- Phase 9: performance
+
+/// `cargo test --release -p zoetrope-core --test core profile_stress_scene -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn profile_stress_scene() {
+    use std::time::Instant;
+    let p = zoetrope_core::demo::stress_project(1000);
+    // ZOE_PROFILE_FRAMES=5000 keeps it running long enough for a sampler.
+    let frames: u32 = std::env::var("ZOE_PROFILE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(48);
+    let t = Instant::now();
+    let mut calls = 0;
+    for f in 0..frames {
+        let mut r = RecordingRenderer::default();
+        render_frame(&p, f % 48, RenderOptions::player(Matrix::IDENTITY), &mut r);
+        calls = r.ops.len();
+    }
+    let ms = t.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+    let t = Instant::now();
+    for f in 0..frames {
+        render_frame(&p, f % 48, RenderOptions::player(Matrix::IDENTITY), &mut zoetrope_core::render::NullRenderer);
+    }
+    let null_ms = t.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+    println!("stress 1000: {calls} draw calls/frame; traversal {null_ms:.2} ms/frame; with recording {ms:.2} ms/frame");
+}
+
+// ---------------------------------------------------------------- Phase 9: history robustness
+
+/// Small deterministic PRNG (xorshift64*), so failures reproduce.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (self.next() >> 11) as f64 / (1u64 << 53) as f64 * (hi - lo)
+    }
+    fn pick<T: Clone>(&mut self, v: &[T]) -> Option<T> {
+        (!v.is_empty()).then(|| v[self.below(v.len())].clone())
+    }
+}
+
+fn all_element_ids(p: &Project) -> Vec<ElementId> {
+    let mut out = Vec::new();
+    for s in &p.symbols {
+        walk_layers(&s.layers, &mut |l| out.extend(l.all_elements().map(|e| e.id)));
+    }
+    out.sort_by_key(|e| e.0);
+    out.dedup();
+    out
+}
+
+fn root_layers(p: &Project) -> Vec<LayerId> {
+    let mut out = Vec::new();
+    walk_layers(&p.symbol(p.root).unwrap().layers, &mut |l| out.push(l.id));
+    out
+}
+
+/// `next_id` is deliberately outside undo (ids are never reused).
+fn same(a: &Project, b: &Project) -> bool {
+    Project { next_id: 0, ..a.clone() } == Project { next_id: 0, ..b.clone() }
+}
+
+/// One random editing operation, as the UI would issue it.
+fn random_op(doc: &mut Document, rng: &mut Rng) -> zoetrope_core::Result<()> {
+    let p = &doc.project;
+    let ids = all_element_ids(p);
+    let layers = root_layers(p);
+    let len = p.symbol(p.root).unwrap().length();
+    let frame = rng.below(len as usize + 3) as u32;
+    let el = rng.pick(&ids).unwrap_or(ElementId(0));
+    let layer = rng.pick(&layers).unwrap_or(LayerId(0));
+    let symbols: Vec<SymbolId> = p.symbols.iter().map(|s| s.id).filter(|s| *s != p.root).collect();
+    let pt = Point::new(rng.range(0.0, 900.0), rng.range(0.0, 500.0));
+    match rng.below(26) {
+        0 => ops::translate_elements(doc, &[el], rng.range(-50.0, 50.0), rng.range(-50.0, 50.0)),
+        1 => ops::patch_element(doc, el, &json!({"opacity": rng.range(0.0, 1.0), "name": format!("n{}", rng.below(9))})),
+        2 => {
+            let s = style(Some(Color::rgb(rng.below(255) as u8, 80, 120)), Some((Color::BLACK, 2.0)));
+            let tool = [ShapeTool::Rect, ShapeTool::Ellipse, ShapeTool::Line, ShapeTool::Polygon][rng.below(4)];
+            let p1 = Point::new(pt.x + rng.range(5.0, 120.0), pt.y + rng.range(5.0, 120.0));
+            ops::create_shape(doc, layer, tool, pt, p1, Modifiers::default(), &ShapeOptions::default(), &s, frame).map(|_| ())
+        }
+        3 => ops::delete_elements(doc, &[el]),
+        4 => ops::duplicate_elements(doc, &[el], 10.0, 10.0).map(|_| ()),
+        5 => ops::insert_frames(doc, &[layer], frame, 1 + rng.below(4) as u32),
+        6 => ops::remove_frames(doc, &[layer], frame, 1 + rng.below(3) as u32),
+        7 => ops::insert_keyframe(doc, &[layer], frame, rng.below(2) == 0),
+        8 => ops::clear_keyframe(doc, &[layer], frame),
+        9 => ops::set_tween(
+            doc,
+            &[layer],
+            frame,
+            Some(Tween { kind: TweenKind::Motion, easing: Easing::Linear, rotate: rng.below(3) as i32 }),
+        ),
+        10 => ops::add_layer(doc, p.root, Some(layer), [LayerKind::Normal, LayerKind::Folder, LayerKind::Guide][rng.below(3)])
+            .map(|_| ()),
+        11 => ops::delete_layer(doc, layer),
+        12 => ops::convert_to_symbol(doc, &[el], "Sym", [SymbolKind::Graphic, SymbolKind::MovieClip][rng.below(2)], frame)
+            .map(|_| ()),
+        13 => ops::set_frame_script(doc, &[layer], frame, Some("stop();")),
+        14 => ops::set_frame_label(doc, &[layer], frame, Some(["a", "b", ""][rng.below(3)])),
+        15 => ops::arrange(doc, &[el], [Arrange::Front, Arrange::Back, Arrange::Forward, Arrange::Backward][rng.below(4)]),
+        16 => ops::move_to_layer(doc, &[el], layer, frame),
+        17 => ops::set_stage_background(doc, Color::rgb(rng.below(255) as u8, 200, 200)),
+        18 => ops::create_text(doc, layer, pt, "Hi", &TextStyle::default(), None, frame).map(|_| ()),
+        19 => match rng.pick(&symbols) {
+            Some(s) => ops::place_instance(doc, layer, s, pt, frame).map(|_| ()),
+            None => Ok(()),
+        },
+        20 => match rng.pick(&symbols) {
+            Some(s) if rng.below(2) == 0 => ops::duplicate_symbol(doc, s).map(|_| ()),
+            Some(s) => ops::delete_symbol(doc, s),
+            None => Ok(()),
+        },
+        21 => ops::set_layer_props(
+            doc,
+            layer,
+            &LayerPatch { visible: Some(rng.below(2) == 0), locked: Some(rng.below(4) == 0), ..Default::default() },
+        ),
+        22 => match rng.pick(&symbols) {
+            Some(s) => ops::set_symbol_props(
+                doc,
+                s,
+                None,
+                Some([SymbolKind::Graphic, SymbolKind::MovieClip, SymbolKind::Button][rng.below(3)]),
+            ),
+            None => Ok(()),
+        },
+        23 => ops::convert_to_path(doc, &[el]),
+        24 => {
+            let stops =
+                vec![GradientStop { offset: 0.0, color: Color::BLACK }, GradientStop { offset: 1.0, color: Color::WHITE }];
+            ops::set_paint_style(doc, &[el], PaintPart::Fill, Some(&PaintStyle::Linear { stops }))
+        }
+        _ => {
+            let others: Vec<LayerId> = layers.iter().copied().filter(|l| *l != layer).collect();
+            ops::move_layer(doc, layer, None, rng.below(others.len() + 1))
+        }
+    }
+}
+
+#[test]
+fn random_edit_sequences_undo_and_redo_exactly() {
+    for seed in [1u64, 7, 42, 2026] {
+        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let mut doc = Document::new(demo_project());
+        let mut states = vec![doc.project.clone()];
+        let (mut ok, mut failed) = (0, 0);
+        for step in 0..300 {
+            let before = doc.project.clone();
+            let depth = doc.undo_depth();
+            match random_op(&mut doc, &mut rng) {
+                Ok(()) => {
+                    let added = doc.undo_depth() - depth;
+                    assert!(added <= 1, "seed {seed} step {step}: one command = one undo step");
+                    if added == 1 {
+                        ok += 1;
+                        states.push(doc.project.clone());
+                    } else {
+                        assert!(same(&doc.project, &before), "seed {seed} step {step}: changed without an undo step");
+                    }
+                }
+                Err(_) => {
+                    failed += 1;
+                    assert!(same(&doc.project, &before), "seed {seed} step {step}: a failed command must change nothing");
+                    assert_eq!(doc.undo_depth(), depth);
+                }
+            }
+            doc.project.validate().unwrap_or_else(|e| panic!("seed {seed} step {step}: invalid project: {e}"));
+            if step % 25 == 0 {
+                assert_eq!(load_from_str(&save_to_string(&doc.project)).unwrap(), doc.project, "seed {seed} step {step}: JSON");
+                assert_eq!(
+                    format::load_pack(&format::save_pack(&doc.project)).unwrap(),
+                    doc.project,
+                    "seed {seed} step {step}: pack"
+                );
+            }
+        }
+        assert!(ok > 100 && failed > 5, "seed {seed}: the op mix should exercise both paths ({ok} ok, {failed} failed)");
+        // Undo everything: every intermediate state comes back, in order.
+        for (i, expected) in states.iter().rev().skip(1).enumerate() {
+            assert!(doc.undo().unwrap());
+            assert!(same(&doc.project, expected), "seed {seed}: undo #{i}");
+        }
+        assert!(!doc.undo().unwrap());
+        // Redo everything.
+        for (i, expected) in states.iter().skip(1).enumerate() {
+            assert!(doc.redo().unwrap());
+            assert!(same(&doc.project, expected), "seed {seed}: redo #{i}");
+        }
+        assert!(!doc.redo().unwrap());
+    }
 }

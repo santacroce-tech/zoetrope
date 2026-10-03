@@ -12,33 +12,81 @@ use crate::model::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edit {
-    SetTransform { element: ElementId, transform: Transform },
+    SetTransform {
+        element: ElementId,
+        transform: Transform,
+    },
     /// Replaces an element's whole value (same id, same symbol/layer slot).
-    ReplaceElement { element: Element },
+    ReplaceElement {
+        element: Element,
+    },
     SetStage(Stage),
     /// Inserts into keyframe `keyframe` (index) of `layer`.
-    InsertElement { layer: LayerId, keyframe: usize, index: usize, element: Element },
-    RemoveElement { element: ElementId },
+    InsertElement {
+        layer: LayerId,
+        keyframe: usize,
+        index: usize,
+        element: Element,
+    },
+    RemoveElement {
+        element: ElementId,
+    },
     /// Sets the element order of one keyframe; `order` must be a
     /// permutation of its current element ids.
-    ReorderElements { layer: LayerId, keyframe: usize, order: Vec<ElementId> },
+    ReorderElements {
+        layer: LayerId,
+        keyframe: usize,
+        order: Vec<ElementId>,
+    },
     /// Replaces a content layer's whole keyframe list (timeline structure
     /// and tween edits). Elements may be kept (same id), dropped, or new.
-    SetKeyframes { layer: LayerId, keyframes: Vec<Keyframe> },
+    SetKeyframes {
+        layer: LayerId,
+        keyframes: Vec<Keyframe>,
+    },
     /// Inserts a layer (with any contents) into `parent` (a folder) or the
     /// symbol's top level.
-    InsertLayer { symbol: SymbolId, parent: Option<LayerId>, index: usize, layer: Layer },
-    RemoveLayer { layer: LayerId },
-    SetLayerProps { layer: LayerId, props: LayerProps },
-    InsertAsset { index: usize, asset: Asset },
-    RemoveAsset { asset: AssetId },
+    InsertLayer {
+        symbol: SymbolId,
+        parent: Option<LayerId>,
+        index: usize,
+        layer: Layer,
+    },
+    RemoveLayer {
+        layer: LayerId,
+    },
+    SetLayerProps {
+        layer: LayerId,
+        props: LayerProps,
+    },
+    InsertAsset {
+        index: usize,
+        asset: Asset,
+    },
+    RemoveAsset {
+        asset: AssetId,
+    },
     /// Adds a symbol definition (with all its contents) to the library.
-    InsertSymbol { index: usize, symbol: Symbol },
+    InsertSymbol {
+        index: usize,
+        symbol: Symbol,
+    },
     /// Removes an unused, non-root symbol.
-    RemoveSymbol { symbol: SymbolId },
-    SetSymbolProps { symbol: SymbolId, name: String, kind: SymbolKind },
-    SetSymbolScript { symbol: SymbolId, script: Option<String> },
-    SetPublish { publish: Option<crate::model::Publish> },
+    RemoveSymbol {
+        symbol: SymbolId,
+    },
+    SetSymbolProps {
+        symbol: SymbolId,
+        name: String,
+        kind: SymbolKind,
+    },
+    SetSymbolScript {
+        symbol: SymbolId,
+        script: Option<String>,
+    },
+    SetPublish {
+        publish: Option<crate::model::Publish>,
+    },
 }
 
 /// The editable, non-structural fields of a layer.
@@ -190,7 +238,8 @@ impl Edit {
                 Ok(Edit::RemoveAsset { asset: id })
             }
             Edit::RemoveAsset { asset } => {
-                let i = p.assets.iter().position(|a| a.id == asset).ok_or_else(|| Error::NotFound(format!("asset {}", asset.0)))?;
+                let i =
+                    p.assets.iter().position(|a| a.id == asset).ok_or_else(|| Error::NotFound(format!("asset {}", asset.0)))?;
                 let mut used = false;
                 for s in &p.symbols {
                     walk_layers(&s.layers, &mut |l| {
@@ -238,7 +287,11 @@ impl Edit {
                 if symbol == p.root {
                     return Err(Error::Invalid("the main timeline can't be removed".into()));
                 }
-                let i = p.symbols.iter().position(|s| s.id == symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
+                let i = p
+                    .symbols
+                    .iter()
+                    .position(|s| s.id == symbol)
+                    .ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
                 if p.symbols.iter().any(|s| s.id != symbol && s.instanced_symbols().contains(&symbol)) {
                     return Err(Error::Invalid("symbol is still used by instances".into()));
                 }
@@ -249,7 +302,11 @@ impl Edit {
                     return Err(Error::Invalid("symbol name cannot be empty".into()));
                 }
                 let s = p.symbol_mut(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
-                let old = Edit::SetSymbolProps { symbol, name: std::mem::replace(&mut s.name, name), kind: std::mem::replace(&mut s.kind, kind) };
+                let old = Edit::SetSymbolProps {
+                    symbol,
+                    name: std::mem::replace(&mut s.name, name),
+                    kind: std::mem::replace(&mut s.kind, kind),
+                };
                 Ok(old)
             }
             Edit::SetPublish { publish } => Ok(Edit::SetPublish { publish: std::mem::replace(&mut p.publish, publish) }),

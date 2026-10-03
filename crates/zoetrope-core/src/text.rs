@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FONT: &[u8] = include_bytes!("../assets/fonts/ZoetropeSans-Regular.ttf");
 pub const DEFAULT_FONT_NAME: &str = "Zoetrope Sans";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TextAlign {
     #[default]
@@ -92,9 +92,7 @@ pub struct TextLayout {
 /// The family name of a font file, or `None` if it isn't a usable font.
 pub fn font_family(data: &[u8]) -> Option<String> {
     let face = ttf_parser::Face::parse(data, 0).ok()?;
-    let name = |id: u16| {
-        face.names().into_iter().find(|n| n.name_id == id && n.is_unicode()).and_then(|n| n.to_string())
-    };
+    let name = |id: u16| face.names().into_iter().find(|n| n.name_id == id && n.is_unicode()).and_then(|n| n.to_string());
     name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY).or_else(|| name(ttf_parser::name_id::FAMILY)).or(Some("Font".into()))
 }
 
@@ -166,7 +164,11 @@ pub fn layout(block: &TextBlock, font_data: &[u8]) -> Option<TextLayout> {
         .map(|l| {
             // Trailing letter spacing doesn't count toward the line's width.
             let w: f64 = l.iter().map(|g| g.advance).sum();
-            if l.is_empty() { 0.0 } else { w - block.letter_spacing }
+            if l.is_empty() {
+                0.0
+            } else {
+                w - block.letter_spacing
+            }
         })
         .collect();
     let box_width = block.width.unwrap_or_else(|| widths.iter().cloned().fold(0.0, f64::max));
@@ -187,6 +189,58 @@ pub fn layout(block: &TextBlock, font_data: &[u8]) -> Option<TextLayout> {
     let n = lines.len().max(1);
     let height = ascender - (face.descender() as f64 * k) + (n - 1) as f64 * line_advance;
     Some(TextLayout { path, width: box_width.max(0.0), height, lines: n })
+}
+
+/// What a layout depends on. The font is identified by its asset id plus
+/// the address and length of its (immutable, shared) bytes.
+#[derive(PartialEq, Eq, Hash)]
+struct LayoutKey {
+    text: String,
+    size: u64,
+    align: TextAlign,
+    letter_spacing: u64,
+    line_height: u64,
+    width: Option<u64>,
+    font: (u32, usize, usize),
+}
+
+/// Most distinct layouts kept; the cache is simply emptied when full.
+const LAYOUT_CACHE_LIMIT: usize = 4096;
+
+thread_local! {
+    static LAYOUTS: std::cell::RefCell<std::collections::HashMap<LayoutKey, std::rc::Rc<TextLayout>>> = Default::default();
+}
+
+/// `layout`, memoized: text is shaped once and then reused every frame
+/// until it changes (shaping dominated the cost of text-heavy frames).
+pub fn layout_cached(block: &TextBlock, font_data: &[u8]) -> Option<std::rc::Rc<TextLayout>> {
+    let key = LayoutKey {
+        text: block.text.clone(),
+        size: block.size.to_bits(),
+        align: block.align,
+        letter_spacing: block.letter_spacing.to_bits(),
+        line_height: block.line_height.to_bits(),
+        width: block.width.map(f64::to_bits),
+        font: (block.font.0, font_data.as_ptr() as usize, font_data.len()),
+    };
+    if let Some(hit) = LAYOUTS.with(|c| c.borrow().get(&key).cloned()) {
+        return Some(hit);
+    }
+    let layout = std::rc::Rc::new(layout(block, font_data)?);
+    LAYOUTS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= LAYOUT_CACHE_LIMIT {
+            c.clear();
+        }
+        c.insert(key, layout.clone());
+    });
+    Some(layout)
+}
+
+/// Forgets cached layouts (when a document is replaced, so a font freed
+/// with the old document can never be confused with a new one).
+pub fn clear_layout_cache() {
+    LAYOUTS.with(|c| c.borrow_mut().clear());
 }
 
 struct Builder<'a> {

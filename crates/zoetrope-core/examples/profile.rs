@@ -15,7 +15,13 @@ fn main() {
         let mut extra = Vec::new();
         for i in 0..n {
             let id = ElementId(p.alloc_id());
-            let t = Transform { x: (i % 40) as f64 * 24.0, y: (i / 40) as f64 * 20.0, scale_x: 0.2, scale_y: 0.2, ..Default::default() };
+            let t = Transform {
+                x: (i % 40) as f64 * 24.0,
+                y: (i / 40) as f64 * 20.0,
+                scale_x: 0.2,
+                scale_y: 0.2,
+                ..Default::default()
+            };
             let mut e = Element::new(id, ElementKind::instance(flower));
             e.transform = t;
             extra.push(e);

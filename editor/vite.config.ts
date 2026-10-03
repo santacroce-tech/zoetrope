@@ -10,5 +10,7 @@ export default defineConfig({
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
   },
-  build: { target: "es2022" },
+  // The exported-player chunk (~1.4 MB, both WASM modules inlined) only
+  // loads when exporting, so it doesn't slow startup.
+  build: { target: "es2022", chunkSizeWarningLimit: 1600 },
 });

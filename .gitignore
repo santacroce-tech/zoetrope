@@ -8,3 +8,4 @@ node_modules
 .vite
 *.tsbuildinfo
 /editor/player-dist
+/editor/tests/dist

@@ -20,10 +20,9 @@ impl fmt::Display for Error {
             Error::NotFound(what) => write!(f, "not found: {what}"),
             Error::Invalid(why) => write!(f, "invalid: {why}"),
             Error::Format(why) => write!(f, "bad project file: {why}"),
-            Error::UnsupportedVersion { found, supported } => write!(
-                f,
-                "project schema version {found} is not supported (this build reads up to {supported})"
-            ),
+            Error::UnsupportedVersion { found, supported } => {
+                write!(f, "project schema version {found} is not supported (this build reads up to {supported})")
+            }
         }
     }
 }

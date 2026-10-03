@@ -1,0 +1,3 @@
+# Matches the codebase style: long lines, compact single-line forms.
+max_width = 130
+use_small_heuristics = "Max"

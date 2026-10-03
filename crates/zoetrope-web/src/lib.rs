@@ -21,16 +21,16 @@ use zoetrope_core::asset::AssetKind;
 use zoetrope_core::edit::Edit;
 use zoetrope_core::geom::Rect;
 use zoetrope_core::interact::{
-    gradient_controls, path_hit, path_info, shape_from_drag, snap_point, DragMode, EditSession, EditTarget, Modifiers, PaintPart, PenSession,
-    ShapeOptions, ShapeTool, SnapConfig, SnapTargets, TransformSession,
+    gradient_controls, path_hit, path_info, shape_from_drag, snap_point, DragMode, EditSession, EditTarget, Modifiers, PaintPart,
+    PenSession, ShapeOptions, ShapeTool, SnapConfig, SnapTargets, TransformSession,
 };
 use zoetrope_core::ops::{self, Align, Arrange, Distribute, LayerPatch, ShapeStyle};
-use zoetrope_core::query::{self, Scope};
 use zoetrope_core::player::Player;
+use zoetrope_core::query::{self, Scope};
 use zoetrope_core::render::{render_editing, render_frame, EditView, Onion, RenderOptions};
 use zoetrope_core::{
-    demo, format, outline, AssetId, Document, Easing, ElementId, Error, LayerId, LayerKind, Matrix, NodeRef, PaintStyle, Point, Project, Stage,
-    SymbolId, SymbolKind, Tween,
+    demo, format, outline, AssetId, Document, Easing, ElementId, Error, LayerId, LayerKind, Matrix, NodeRef, PaintStyle, Point,
+    Project, Stage, SymbolId, SymbolKind, Tween,
 };
 
 /// Most frames `playTick` advances in one call.
@@ -59,10 +59,17 @@ struct PreviewRenderer<'a>(Canvas2dRenderer<'a>);
 
 impl zoetrope_core::render::Renderer for PreviewRenderer<'_> {
     fn begin_frame(&mut self, frame: &zoetrope_core::render::FrameInfo) {
-        let transparent = zoetrope_core::render::FrameInfo { background: zoetrope_core::Color::rgba(0, 0, 0, 0), ..frame.clone() };
+        let transparent =
+            zoetrope_core::render::FrameInfo { background: zoetrope_core::Color::rgba(0, 0, 0, 0), ..frame.clone() };
         self.0.begin_frame(&transparent);
     }
-    fn fill_path(&mut self, path: &zoetrope_core::geom::Path, transform: &Matrix, paint: &zoetrope_core::Paint, rule: zoetrope_core::FillRule) {
+    fn fill_path(
+        &mut self,
+        path: &zoetrope_core::geom::Path,
+        transform: &Matrix,
+        paint: &zoetrope_core::Paint,
+        rule: zoetrope_core::FillRule,
+    ) {
         self.0.fill_path(path, transform, paint, rule)
     }
     fn stroke_path(&mut self, path: &zoetrope_core::geom::Path, transform: &Matrix, stroke: &zoetrope_core::Stroke) {
@@ -113,6 +120,18 @@ fn js_err(e: Error) -> JsError {
     JsError::new(&e.to_string())
 }
 
+/// A Rust panic aborts the WASM instance (`unreachable`). Report the real
+/// message and location first, so the UI (and bug reports) can say what
+/// happened; the editor then offers its autosave for recovery.
+fn install_panic_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            web_sys::console::error_1(&format!("Zoetrope core panicked: {info}").into());
+        }));
+    });
+}
+
 fn parse<T: DeserializeOwned>(what: &str, json: &str) -> Result<T, JsError> {
     serde_json::from_str(json).map_err(|e| JsError::new(&format!("bad {what}: {e}")))
 }
@@ -134,6 +153,7 @@ impl Engine {
     /// Creates an engine holding the built-in demo project.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Engine {
+        install_panic_hook();
         Engine {
             doc: Document::new(demo::demo_project()),
             session: None,
@@ -150,6 +170,7 @@ impl Engine {
     }
 
     fn replace_document(&mut self, project: Project) {
+        zoetrope_core::text::clear_layout_cache();
         self.doc = Document::new(project);
         self.session = None;
         self.edit = None;
@@ -242,7 +263,8 @@ impl Engine {
     #[wasm_bindgen(js_name = enterInstance)]
     pub fn enter_instance(&mut self, id: u32) -> Result<(), JsError> {
         let scope = self.scope();
-        let se = query::displayed(&self.doc.project, &scope, ElementId(id)).ok_or_else(|| JsError::new("that object isn't on this frame"))?;
+        let se = query::displayed(&self.doc.project, &scope, ElementId(id))
+            .ok_or_else(|| JsError::new("that object isn't on this frame"))?;
         let zoetrope_core::ElementKind::Instance { symbol, .. } = se.element.kind else {
             return Err(JsError::new("only symbol instances can be edited in place"));
         };
@@ -289,7 +311,8 @@ impl Engine {
     #[wasm_bindgen(js_name = repairEditStack)]
     pub fn repair_edit_stack(&mut self) -> bool {
         let p = &self.doc.project;
-        let bad = self.levels.iter().position(|l| p.symbol(l.symbol).is_none() || l.instance.is_some_and(|id| p.element(id).is_none()));
+        let bad =
+            self.levels.iter().position(|l| p.symbol(l.symbol).is_none() || l.instance.is_some_and(|id| p.element(id).is_none()));
         match bad {
             Some(depth) => {
                 self.exit_to(depth);
@@ -303,7 +326,8 @@ impl Engine {
     #[wasm_bindgen(js_name = breadcrumbJson)]
     pub fn breadcrumb_json(&self) -> String {
         let p = &self.doc.project;
-        let mut crumbs = vec![serde_json::json!({ "label": p.symbol(p.root).map_or("Scene", |s| s.name.as_str()), "kind": "movieClip" })];
+        let mut crumbs =
+            vec![serde_json::json!({ "label": p.symbol(p.root).map_or("Scene", |s| s.name.as_str()), "kind": "movieClip" })];
         for l in &self.levels {
             let sym = p.symbol(l.symbol);
             let name = sym.map_or("?", |s| s.name.as_str());
@@ -348,7 +372,12 @@ impl Engine {
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = PreviewRenderer(Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps));
-        render_editing(p, &view, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None }, &mut r);
+        render_editing(
+            p,
+            &view,
+            RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None },
+            &mut r,
+        );
     }
 
     /// F8: turns elements into a symbol instance. `kind`: graphic | movieClip | button.
@@ -424,7 +453,9 @@ impl Engine {
     #[wasm_bindgen(js_name = updateText)]
     pub fn update_text(&mut self, text: &str) {
         let Some(edit) = &self.text_edit else { return };
-        if let Some(zoetrope_core::Element { kind: zoetrope_core::ElementKind::Text(t), .. }) = self.doc.project.element_mut(edit.id) {
+        if let Some(zoetrope_core::Element { kind: zoetrope_core::ElementKind::Text(t), .. }) =
+            self.doc.project.element_mut(edit.id)
+        {
             t.text = text.to_string();
         }
     }
@@ -490,7 +521,9 @@ impl Engine {
             .assets
             .iter()
             .filter_map(|a| match &a.kind {
-                AssetKind::Audio { duration, mime, .. } => Some(serde_json::json!({ "id": a.id.0, "name": a.name, "duration": duration, "mime": mime })),
+                AssetKind::Audio { duration, mime, .. } => {
+                    Some(serde_json::json!({ "id": a.id.0, "name": a.name, "duration": duration, "mime": mime }))
+                }
                 _ => None,
             })
             .collect();
@@ -565,7 +598,15 @@ impl Engine {
 
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = playRender)]
-    pub fn play_render(&self, ctx: &CanvasRenderingContext2d, scale: f64, offset_x: f64, offset_y: f64, clip: bool, show_guides: bool) {
+    pub fn play_render(
+        &self,
+        ctx: &CanvasRenderingContext2d,
+        scale: f64,
+        offset_x: f64,
+        offset_y: f64,
+        clip: bool,
+        show_guides: bool,
+    ) {
         let Some(pl) = &self.player else { return };
         let view = Matrix::translate(offset_x, offset_y) * Matrix::scale(scale, scale);
         let images = self.images.borrow();
@@ -774,17 +815,28 @@ impl Engine {
     pub fn bench_traversal(&self, frames: u32) -> u32 {
         let len = self.doc.project.symbol(self.doc.project.root).map_or(1, |s| s.length());
         for f in 0..frames {
-            render_frame(&self.doc.project, f % len, RenderOptions::player(Matrix::IDENTITY), &mut zoetrope_core::render::NullRenderer);
+            render_frame(
+                &self.doc.project,
+                f % len,
+                RenderOptions::player(Matrix::IDENTITY),
+                &mut zoetrope_core::render::NullRenderer,
+            );
         }
         frames
     }
 
     // ----- documents -----
 
-    /// `kind`: `"animation"` (default) or `"game"` (the scripted demo).
+    /// `kind`: `"animation"` (default), `"game"` (the scripted demo) or
+    /// `"stress"` (a heavy scene for performance checks).
     #[wasm_bindgen(js_name = newDemo)]
     pub fn new_demo(&mut self, kind: Option<String>) {
-        self.replace_document(if kind.as_deref() == Some("game") { demo::game_project() } else { demo::demo_project() });
+        self.replace_document(match kind.as_deref() {
+            Some("game") => demo::game_project(),
+            // Profiling scene: 1000 nested, tweened flowers + clips + text.
+            Some("stress") => demo::stress_project(1000),
+            _ => demo::demo_project(),
+        });
     }
 
     /// The project as a binary pack (assets as raw bytes; see docs/FORMAT.md, "Pack").
@@ -826,6 +878,12 @@ impl Engine {
         let project = format::load_from_str(json).map_err(js_err)?;
         self.replace_document(project);
         Ok(())
+    }
+
+    /// Flags the document as having unsaved changes (recovered work).
+    #[wasm_bindgen(js_name = markUnsaved)]
+    pub fn mark_unsaved(&mut self) {
+        self.doc.mark_unsaved();
     }
 
     #[wasm_bindgen(js_name = markSaved)]
@@ -959,7 +1017,16 @@ impl Engine {
     /// would create, for the live preview; `null` if too small.
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = shapePreview)]
-    pub fn shape_preview(&self, tool: &str, x0: f64, y0: f64, x1: f64, y1: f64, mods_json: &str, opts_json: &str) -> Result<String, JsError> {
+    pub fn shape_preview(
+        &self,
+        tool: &str,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        mods_json: &str,
+        opts_json: &str,
+    ) -> Result<String, JsError> {
         let tool: ShapeTool = parse("tool", &format!("{tool:?}"))?;
         let mods: Modifiers = parse("modifiers", mods_json)?;
         let opts: ShapeOptions = parse("shape options", opts_json)?;
@@ -1032,11 +1099,20 @@ impl Engine {
 
     /// Creates a path from freehand samples (JSON `[{x, y}, …]`, stage coords).
     #[wasm_bindgen(js_name = createFreehand)]
-    pub fn create_freehand(&mut self, layer: u32, points_json: &str, smooth: bool, tolerance: f64, style_json: &str) -> Result<Option<u32>, JsError> {
+    pub fn create_freehand(
+        &mut self,
+        layer: u32,
+        points_json: &str,
+        smooth: bool,
+        tolerance: f64,
+        style_json: &str,
+    ) -> Result<Option<u32>, JsError> {
         let inv = self.scope().matrix.invert().unwrap_or(Matrix::IDENTITY);
         let points: Vec<Point> = parse::<Vec<Point>>("points", points_json)?.into_iter().map(|p| inv.apply(p)).collect();
         let style: ShapeStyle = parse("style", style_json)?;
-        ops::create_freehand(&mut self.doc, LayerId(layer), &points, smooth, tolerance, &style, self.frame).map(|e| e.map(|e| e.0)).map_err(js_err)
+        ops::create_freehand(&mut self.doc, LayerId(layer), &points, smooth, tolerance, &style, self.frame)
+            .map(|e| e.map(|e| e.0))
+            .map_err(js_err)
     }
 
     // ----- subselection & gradient editing -----
@@ -1067,7 +1143,8 @@ impl Engine {
     pub fn begin_edit(&mut self, id: u32, target_json: &str, x: f64, y: f64) -> Result<(), JsError> {
         let target: EditTarget = parse("edit target", target_json)?;
         self.cancel_edit();
-        self.edit = Some(EditSession::begin(&self.doc.project, self.scope(), ElementId(id), target, Point::new(x, y)).map_err(js_err)?);
+        self.edit =
+            Some(EditSession::begin(&self.doc.project, self.scope(), ElementId(id), target, Point::new(x, y)).map_err(js_err)?);
         Ok(())
     }
 
@@ -1168,8 +1245,8 @@ impl Engine {
         let opts: ShapeOptions = parse("shape options", opts_json)?;
         let style: ShapeStyle = parse("style", style_json)?;
         let (p0, p1) = (self.local(x0, y0), self.local(x1, y1));
-        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, p0, p1, mods, &opts, &style, self.frame)
-            .map_err(js_err)?;
+        let id =
+            ops::create_shape(&mut self.doc, LayerId(layer), tool, p0, p1, mods, &opts, &style, self.frame).map_err(js_err)?;
         Ok(id.map(|e| e.0))
     }
 
