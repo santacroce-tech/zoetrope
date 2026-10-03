@@ -58,7 +58,10 @@ test that loads a fixture of the old version. Purely additive optional fields
 
 **Stage**: `width`, `height` (stage px, in (0, 16384]), `background` (Color), `fps` (in (0, 240]).
 
-**Symbol**: `id`, `name`, `layers: Layer[]`.
+**Symbol**: `id`, `name`, `kind` (*optional*, default `"graphic"`: one of
+`"graphic"`, `"movieClip"`, `"button"`; see *Symbol timing*), `layers: Layer[]`.
+The root symbol is the main timeline; its kind is irrelevant (the demo marks
+it `movieClip`).
 
 ### Layer
 
@@ -110,9 +113,28 @@ itself is shown. Unpaired elements are shown unchanged. Rotation goes
 - **Paints:** interpolated per stop when the stop counts match; a solid
   tweens against a gradient as a uniform gradient.
 
-**Nested timelines (provisional, Phase 4):** an instance shows its symbol at
-`parentFrame mod symbolLength`. Phase 5 replaces this with per-instance
-symbol clocks.
+### Symbol timing (nested timelines)
+
+The display tree is a **tree of clocks**. An instance is identified by its
+*instance path*: the `(layer id, element track)` at each level from the main
+timeline down. What frame an instance of a symbol of length *L* shows:
+
+| Kind | Rule |
+|------|------|
+| Graphic | Synced to its parent: `n = firstFrame + (parentFrame − start of the parent keyframe holding it)`; `loop` → `n mod L`, `playOnce` → `min(n, L−1)`, `singleFrame` → `min(firstFrame, L−1)`. |
+| Movie clip | Its own clock: frame 0 on the tick it **appears**, then +1 per tick, looping (`mod L`). It "appears" when its track starts an unbroken run of keyframes (same layer, same track, same symbol) containing it; it keeps its clock across those keyframes and restarts if it disappears and comes back. |
+| Button | Frame 0 Up, 1 Over (pointer over the hit area), 2 Down (pressed on it), 3 Hit (the clickable area; never drawn; if missing, the Up art is the hit area). |
+
+The **runtime** (`player::Player`: preview playback now, the exported player
+and scripts later) holds the clocks: each tick advances the main timeline by
+one (looping) and every on-stage movie clip by one. A movie clip still on
+stage when the main timeline loops keeps running.
+
+The **editor** (scrubbing, stage editing, single-frame rendering) uses the
+stateless form of the same rules: a movie clip shows `(parentFrame −
+appearedFrame) mod L`, i.e. "as if played straight through from frame 0".
+The two agree frame-for-frame until the main timeline first loops (asserted
+by a test).
 
 ### Element
 
@@ -129,7 +151,10 @@ symbol clocks.
 
 * `"type": "shape"`: `geometry`, optional `fill` (Paint), optional `stroke`
   (Stroke), optional `fillRule` (`"nonZero"` default \| `"evenOdd"`).
-* `"type": "instance"`: `symbol` (id). Instance references must be acyclic.
+* `"type": "instance"`: `symbol` (id), plus for graphic symbols *optional*
+  `firstFrame` (default 0) and `loopMode` (`"loop"` default \| `"playOnce"` \|
+  `"singleFrame"`). Instance references must be acyclic. The element `name`
+  is the instance name (button events report it; scripts will address it).
 * `"type": "bitmap"`: `asset` (id of an image asset), drawn at the image's pixel size, centered on the content origin.
 
 **BlendMode**: `normal`, `layer`, `multiply`, `screen`, `overlay`, `darken`,
@@ -230,5 +255,4 @@ load → save is byte-stable.
 
 ## Planned changes
 
-Symbol types and per-instance clocks (Phase 5) will add fields to symbols
-and instances.
+Scripts (Phase 7) will attach to frames and symbols.

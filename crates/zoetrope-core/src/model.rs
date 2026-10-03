@@ -84,7 +84,36 @@ impl Stage {
 pub struct Symbol {
     pub id: SymbolId,
     pub name: String,
+    /// How instances of this symbol get their frame (see `timeline`).
+    #[serde(default)]
+    pub kind: SymbolKind,
     pub layers: Vec<Layer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SymbolKind {
+    /// Timeline synced to the parent's (per-instance first frame + loop mode).
+    #[default]
+    Graphic,
+    /// Independent clock per instance, starting when the instance appears.
+    MovieClip,
+    /// Frames are Up, Over, Down, Hit; the pointer picks the state.
+    Button,
+}
+
+/// How a graphic instance maps its parent's frames onto its own timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoopMode {
+    #[default]
+    Loop,
+    PlayOnce,
+    SingleFrame,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -201,9 +230,24 @@ fn is_normal(b: &BlendMode) -> bool {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ElementKind {
     Shape(Shape),
-    Instance { symbol: SymbolId },
+    #[serde(rename_all = "camelCase")]
+    Instance {
+        symbol: SymbolId,
+        /// Graphic symbols: frame shown when the parent keyframe starts.
+        #[serde(default, skip_serializing_if = "is_default")]
+        first_frame: u32,
+        /// Graphic symbols: loop / play once / single frame.
+        #[serde(default, skip_serializing_if = "is_default")]
+        loop_mode: LoopMode,
+    },
     /// An embedded image, drawn at its pixel size centered on the origin.
     Bitmap { asset: AssetId },
+}
+
+impl ElementKind {
+    pub fn instance(symbol: SymbolId) -> ElementKind {
+        ElementKind::Instance { symbol, first_frame: 0, loop_mode: LoopMode::Loop }
+    }
 }
 
 impl Element {
@@ -720,7 +764,7 @@ impl Project {
     pub fn check_element_placement(&self, symbol: SymbolId, e: &Element) -> Result<()> {
         e.validate()?;
         match e.kind {
-            ElementKind::Instance { symbol: child } => {
+            ElementKind::Instance { symbol: child, .. } => {
                 self.require_symbol(child)?;
                 if self.symbol_reaches(child, symbol) {
                     return Err(Error::Invalid("a symbol cannot contain an instance of itself".into()));
@@ -780,7 +824,7 @@ impl Project {
                         claim(e.id.0)?;
                         e.validate()?;
                         match e.kind {
-                            ElementKind::Instance { symbol } if self.symbol(symbol).is_none() => {
+                            ElementKind::Instance { symbol, .. } if self.symbol(symbol).is_none() => {
                                 return invalid(format!("element {} instances missing symbol {}", e.id.0, symbol.0))
                             }
                             ElementKind::Bitmap { asset } if self.asset(asset).is_none() => {
@@ -811,7 +855,7 @@ impl Symbol {
         let mut out = Vec::new();
         walk_layers(&self.layers, &mut |l| {
             out.extend(l.all_elements().filter_map(|e| match e.kind {
-                ElementKind::Instance { symbol } => Some(symbol),
+                ElementKind::Instance { symbol, .. } => Some(symbol),
                 _ => None,
             }))
         });

@@ -9,7 +9,7 @@ use crate::asset::AssetKind;
 use crate::geom::Rect;
 use crate::math::{Matrix, Point};
 use crate::model::*;
-use crate::timeline::evaluate_layer;
+use crate::timeline::{evaluate_layer_shown, instance_frame};
 use serde::Serialize;
 use std::borrow::Cow;
 
@@ -32,14 +32,6 @@ impl Scope {
     }
 }
 
-/// The frame a nested symbol shows when its parent is at `frame`.
-///
-/// Phase 4 rule (provisional until Phase 5 defines symbol clocks): a nested
-/// timeline plays in sync with its parent and loops.
-pub fn child_frame(child: &Symbol, frame: u32) -> u32 {
-    frame % child.length()
-}
-
 /// Uniform scale estimate of a matrix (geometric mean of axis scales).
 pub fn scale_factor(m: &Matrix) -> f64 {
     m.determinant().abs().sqrt()
@@ -51,6 +43,9 @@ pub struct SceneElement<'a> {
     pub element: Cow<'a, Element>,
     pub layer: LayerId,
     pub locked: bool,
+    /// For instances: the frame their symbol shows (stateless timing, see
+    /// `timeline::instance_frame`); 0 otherwise.
+    pub child_frame: u32,
 }
 
 /// Elements of `symbol` visible at `frame`, in render order (back first).
@@ -60,15 +55,23 @@ pub fn scene_elements<'a>(p: &'a Project, symbol: SymbolId, frame: u32) -> Vec<S
         .into_iter()
         .filter(|(_, vis, _)| *vis)
         .flat_map(|(l, _, locked)| {
-            evaluate_layer(l, frame).into_iter().map(move |element| SceneElement { element, layer: l.id, locked })
+            evaluate_layer_shown(l, frame).into_iter().map(move |shown| {
+                let child_frame = match shown.element.kind {
+                    ElementKind::Instance { symbol, .. } => {
+                        p.symbol(symbol).map_or(0, |child| instance_frame(child, &shown.element.kind, &shown, frame))
+                    }
+                    _ => 0,
+                };
+                SceneElement { element: shown.element, layer: l.id, locked, child_frame }
+            })
         })
         .collect()
 }
 
 /// Bounds of `kind`'s content drawn through `m`. `None` if it draws nothing
-/// (e.g. an empty symbol). `frame` is the frame of the timeline the element
-/// sits in (nested symbols derive theirs from it).
-pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, frame: u32, depth: usize) -> Option<Rect> {
+/// (e.g. an empty symbol). `child_frame` is the frame an instance's symbol
+/// shows (ignored for other kinds).
+pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, child_frame: u32, depth: usize) -> Option<Rect> {
     match kind {
         ElementKind::Shape(s) => {
             let b = s.geometry.to_path().bounds(m)?;
@@ -81,35 +84,41 @@ pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, frame: u32, d
             let (w, h) = (width as f64, height as f64);
             Some(Rect::new(-w / 2.0, -h / 2.0, w / 2.0, h / 2.0).transformed(m))
         }
-        ElementKind::Instance { symbol } => {
+        ElementKind::Instance { symbol, .. } => {
             if depth > MAX_NESTING_DEPTH {
                 return None;
             }
-            let sym = p.symbol(*symbol)?;
-            let f = child_frame(sym, frame);
             Rect::union_all(
-                scene_elements(p, *symbol, f)
+                scene_elements(p, *symbol, child_frame)
                     .into_iter()
-                    .filter_map(|se| content_bounds(p, &se.element.kind, &(*m * se.element.transform.matrix()), f, depth + 1)),
+                    .filter_map(|se| content_bounds(p, &se.element.kind, &(*m * se.element.transform.matrix()), se.child_frame, depth + 1)),
             )
         }
     }
 }
 
-/// An element's bounds in its parent symbol's space, with nested content at `frame`.
-pub fn element_bounds(p: &Project, e: &Element, frame: u32) -> Option<Rect> {
-    content_bounds(p, &e.kind, &e.transform.matrix(), frame, 0)
+/// An element's bounds in its parent symbol's space, with nested content
+/// shown as at the parent's `parent_frame`.
+pub fn element_bounds(p: &Project, e: &Element, parent_frame: u32) -> Option<Rect> {
+    let child_frame = child_frame_of(p, e.id, parent_frame);
+    content_bounds(p, &e.kind, &e.transform.matrix(), child_frame, 0)
+}
+
+/// The frame an instance's symbol shows when its parent timeline is at
+/// `parent_frame` (0 if the element isn't an instance or isn't shown there).
+pub fn child_frame_of(p: &Project, id: ElementId, parent_frame: u32) -> u32 {
+    let Some(loc) = p.locate(id) else { return 0 };
+    scene_elements(p, loc.symbol, parent_frame).into_iter().find(|se| se.element.id == id).map_or(0, |se| se.child_frame)
 }
 
 /// An element as displayed in the scope's current frame, or `None` if it
 /// isn't shown there (other keyframe, hidden layer, deleted).
-pub fn displayed<'a>(p: &'a Project, scope: &Scope, id: ElementId) -> Option<Cow<'a, Element>> {
+pub fn displayed<'a>(p: &'a Project, scope: &Scope, id: ElementId) -> Option<SceneElement<'a>> {
     let loc = p.locate(id)?;
     if loc.symbol != scope.symbol {
         return None;
     }
-    let layer = p.layer(loc.layer)?;
-    evaluate_layer(layer, scope.frame).into_iter().find(|e| e.id == id)
+    scene_elements(p, scope.symbol, scope.frame).into_iter().find(|se| se.element.id == id)
 }
 
 /// Topmost selectable element of the scope under stage point `pt`.
@@ -119,12 +128,12 @@ pub fn hit_test(p: &Project, scope: &Scope, pt: Point, tolerance: f64) -> Option
         .iter()
         .rev()
         .filter(|se| !se.locked)
-        .find(|se| hits(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), pt, tolerance, scope.frame, 0))
+        .find(|se| hits(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), pt, tolerance, se.child_frame, 0))
         .map(|se| se.element.id)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, frame: u32, depth: usize) -> bool {
+pub fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, child_frame: u32, depth: usize) -> bool {
     match kind {
         ElementKind::Shape(s) => {
             let Some(inv) = m.invert() else { return false };
@@ -143,16 +152,14 @@ fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, frame:
             let q = inv.apply(pt);
             q.x.abs() <= width as f64 / 2.0 && q.y.abs() <= height as f64 / 2.0
         }
-        ElementKind::Instance { symbol } => {
+        ElementKind::Instance { symbol, .. } => {
             if depth > MAX_NESTING_DEPTH {
                 return false;
             }
-            let Some(sym) = p.symbol(*symbol) else { return false };
-            let f = child_frame(sym, frame);
-            scene_elements(p, *symbol, f)
+            scene_elements(p, *symbol, child_frame)
                 .iter()
                 .rev()
-                .any(|se| hits(p, &se.element.kind, &(*m * se.element.transform.matrix()), pt, tol, f, depth + 1))
+                .any(|se| hits(p, &se.element.kind, &(*m * se.element.transform.matrix()), pt, tol, se.child_frame, depth + 1))
         }
     }
 }
@@ -186,11 +193,9 @@ fn pick_in(p: &Project, symbol: SymbolId, frame: u32, m: &Matrix, pt: Point, tol
                     return Some((s.clone(), PaintPart::Fill));
                 }
             }
-            ElementKind::Instance { symbol: child } => {
-                if let Some(sym) = p.symbol(*child) {
-                    if let Some(hit) = pick_in(p, *child, child_frame(sym, frame), &em, pt, tol, depth + 1) {
-                        return Some(hit);
-                    }
+            ElementKind::Instance { symbol: child, .. } => {
+                if let Some(hit) = pick_in(p, *child, se.child_frame, &em, pt, tol, depth + 1) {
+                    return Some(hit);
                 }
             }
             ElementKind::Bitmap { .. } => {}
@@ -202,10 +207,13 @@ fn pick_in(p: &Project, symbol: SymbolId, frame: u32, m: &Matrix, pt: Point, tol
 /// Selectable elements of the scope whose stage bounds intersect `rect`,
 /// in render order.
 pub fn marquee(p: &Project, scope: &Scope, rect: Rect) -> Vec<ElementId> {
-    selectable(p, scope)
+    scene_elements(p, scope.symbol, scope.frame)
         .into_iter()
-        .filter(|e| content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0).is_some_and(|b| b.intersects(&rect)))
-        .map(|e| e.id)
+        .filter(|se| !se.locked)
+        .filter(|se| {
+            content_bounds(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), se.child_frame, 0).is_some_and(|b| b.intersects(&rect))
+        })
+        .map(|se| se.element.id)
         .collect()
 }
 
@@ -238,14 +246,14 @@ pub fn selection_frame(p: &Project, scope: &Scope, ids: &[ElementId]) -> Option<
     match ids {
         [] => None,
         [id] => {
-            let e = displayed(p, scope, *id)?;
-            let local = content_bounds(p, &e.kind, &Matrix::IDENTITY, scope.frame, 0)?;
-            Some((scope.matrix * e.transform.matrix(), local))
+            let se = displayed(p, scope, *id)?;
+            let local = content_bounds(p, &se.element.kind, &Matrix::IDENTITY, se.child_frame, 0)?;
+            Some((scope.matrix * se.element.transform.matrix(), local))
         }
         _ => {
             let b = Rect::union_all(ids.iter().filter_map(|id| {
-                let e = displayed(p, scope, *id)?;
-                content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0)
+                let se = displayed(p, scope, *id)?;
+                content_bounds(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), se.child_frame, 0)
             }))?;
             Some((Matrix::IDENTITY, b))
         }
@@ -257,14 +265,14 @@ pub fn selection_geometry(p: &Project, scope: &Scope, ids: &[ElementId]) -> Opti
     let items: Vec<Rect> = ids
         .iter()
         .filter_map(|id| {
-            let e = displayed(p, scope, *id)?;
-            content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), scope.frame, 0)
+            let se = displayed(p, scope, *id)?;
+            content_bounds(p, &se.element.kind, &(scope.matrix * se.element.transform.matrix()), se.child_frame, 0)
         })
         .collect();
     let bounds = Rect::union_all(items.iter().copied())?;
     let (pivot, has_own_pivot) = match ids {
         [id] => {
-            let t = displayed(p, scope, *id)?.transform;
+            let t = displayed(p, scope, *id)?.element.transform;
             (scope.matrix.apply(Point::new(t.x, t.y)), true)
         }
         _ => (bx.center(), false),

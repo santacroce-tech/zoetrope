@@ -95,7 +95,8 @@ pub fn duplicate_element(doc: &mut Document, id: ElementId, dx: f64, dy: f64) ->
 }
 
 /// Keys of an element's JSON form that `patch_element` may change.
-const PATCHABLE: &[&str] = &["name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke", "fillRule"];
+const PATCHABLE: &[&str] =
+    &["name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke", "fillRule", "firstFrame", "loopMode"];
 
 /// Merges a JSON patch into an element (`transform`, and `stroke` when the
 /// shape already has one, merge field by field; other keys replace; `null`
@@ -122,6 +123,11 @@ pub fn patch_elements(doc: &mut Document, ids: &[ElementId], patch: &Value) -> R
                 for (tk, tv) in pt {
                     t.insert(tk.clone(), tv.clone());
                 }
+            } else if k == "firstFrame" || k == "loopMode" {
+                if !matches!(e.kind, ElementKind::Instance { .. }) {
+                    return Err(Error::Invalid(format!("{k:?} only applies to symbol instances")));
+                }
+                v[k] = pv.clone();
             } else if k == "fill" || k == "stroke" || k == "geometry" || k == "fillRule" {
                 if !matches!(e.kind, ElementKind::Shape(_)) {
                     return Err(Error::Invalid(format!("{k:?} only applies to shapes")));
@@ -918,4 +924,152 @@ pub fn set_tween(doc: &mut Document, layers: &[LayerId], frame: u32, tween: Opti
         kfs[i].tween = tween.clone();
         Ok(Some(kfs))
     })
+}
+
+// ---------------------------------------------------------------- symbols
+
+/// Moves `ids` (elements of one symbol, shown at `frame`) into a new symbol
+/// whose registration point is the selection's bounds center, and puts one
+/// instance in their place (on the top-most source layer, where the
+/// front-most element was). Returns the new instance's id and the symbol.
+pub fn convert_to_symbol(
+    doc: &mut Document,
+    ids: &[ElementId],
+    name: &str,
+    kind: SymbolKind,
+    frame: u32,
+) -> Result<(ElementId, SymbolId)> {
+    if ids.is_empty() {
+        return Err(Error::Invalid("select something to convert".into()));
+    }
+    let p = &doc.project;
+    let mut items = Vec::new();
+    for id in ids {
+        let loc = p.locate(*id).ok_or_else(|| not_found(*id))?;
+        let layer = p.require_layer(loc.layer)?;
+        if crate::timeline::is_tweened_frame(layer, frame) {
+            return Err(Error::Invalid("can't convert on a tweened frame: insert a keyframe here (F6)".into()));
+        }
+        items.push(loc);
+    }
+    let parent = items[0].symbol;
+    if items.iter().any(|l| l.symbol != parent) {
+        return Err(Error::Invalid("elements must belong to the same symbol".into()));
+    }
+    // Render order: layer order bottom→top, then element order.
+    let sym = p.require_symbol(parent)?;
+    let order: Vec<LayerId> = sym.content_layers().iter().map(|(l, _, _)| l.id).collect();
+    items.sort_by_key(|l| (order.iter().position(|id| *id == l.layer), l.keyframe, l.index));
+    let bounds = Rect::union_all(items.iter().filter_map(|l| {
+        let e = &p.layer(l.layer)?.keyframes[l.keyframe].elements[l.index];
+        element_bounds(p, e, frame)
+    }))
+    .ok_or_else(|| Error::Invalid("selection has no bounds".into()))?;
+    let c = bounds.center();
+    let top = *items.last().unwrap();
+
+    let symbol_id = SymbolId(doc.project.alloc_id());
+    let layer_id = LayerId(doc.project.alloc_id());
+    let mut moved = Vec::new();
+    for l in &items {
+        let mut e = doc.project.layer(l.layer).unwrap().keyframes[l.keyframe].elements[l.index].clone();
+        e.transform.x -= c.x;
+        e.transform.y -= c.y;
+        moved.push(e);
+    }
+    // Buttons get all four states (Up, Over, Down, Hit) showing the same art.
+    let duration = if kind == SymbolKind::Button { 4 } else { 1 };
+    let mut layer = Layer::new(layer_id, "Layer 1", LayerKind::Normal);
+    layer.keyframes = vec![Keyframe { duration, elements: Vec::new(), tween: None }];
+    let symbol = Symbol { id: symbol_id, name: name.trim().to_string(), kind, layers: vec![layer] };
+
+    let mut instance = Element::new(ElementId(doc.project.alloc_id()), ElementKind::instance(symbol_id));
+    instance.transform = Transform::at(c.x, c.y);
+    let instance_id = instance.id;
+    let mut edits = vec![Edit::InsertSymbol { index: doc.project.symbols.len(), symbol }];
+    // Remove back-to-front from the end so indices stay valid, then insert.
+    for l in items.iter().rev() {
+        edits.push(Edit::RemoveElement { element: doc.project.layer(l.layer).unwrap().keyframes[l.keyframe].elements[l.index].id });
+    }
+    for (i, e) in moved.into_iter().enumerate() {
+        edits.push(Edit::InsertElement { layer: layer_id, keyframe: 0, index: i, element: e });
+    }
+    let removed_before_top = items.iter().filter(|l| l.layer == top.layer && l.keyframe == top.keyframe && l.index < top.index).count();
+    edits.push(Edit::InsertElement { layer: top.layer, keyframe: top.keyframe, index: top.index - removed_before_top, element: instance });
+    doc.execute("Convert to Symbol", edits)?;
+    Ok((instance_id, symbol_id))
+}
+
+pub fn set_symbol_props(doc: &mut Document, symbol: SymbolId, name: Option<&str>, kind: Option<SymbolKind>) -> Result<()> {
+    let s = doc.project.require_symbol(symbol)?;
+    let (name, kind) = (name.map_or_else(|| s.name.clone(), |n| n.trim().to_string()), kind.unwrap_or(s.kind));
+    if name == s.name && kind == s.kind {
+        return Ok(());
+    }
+    doc.execute("Symbol Properties", vec![Edit::SetSymbolProps { symbol, name, kind }])
+}
+
+/// Copies a symbol (fresh ids throughout; nested instances still point at
+/// the same symbols). Returns the copy.
+pub fn duplicate_symbol(doc: &mut Document, symbol: SymbolId) -> Result<SymbolId> {
+    let src = doc.project.require_symbol(symbol)?.clone();
+    if symbol == doc.project.root {
+        return Err(Error::Invalid("the main timeline can't be duplicated".into()));
+    }
+    let id = SymbolId(doc.project.alloc_id());
+    /// Fresh layer/element ids; tracks are remapped per layer so tweens
+    /// still pair the copies up.
+    fn refresh(p: &mut Project, layers: &mut [Layer]) {
+        for l in layers {
+            l.id = LayerId(p.alloc_id());
+            let mut tracks = std::collections::HashMap::new();
+            for k in &mut l.keyframes {
+                for e in &mut k.elements {
+                    let old = e.track();
+                    e.id = ElementId(p.alloc_id());
+                    let t = *tracks.entry(old).or_insert(e.id.0);
+                    e.track = (t != e.id.0).then_some(t);
+                }
+            }
+            refresh(p, &mut l.children);
+        }
+    }
+    let mut layers = src.layers.clone();
+    refresh(&mut doc.project, &mut layers);
+    let copy = Symbol { id, name: format!("{} copy", src.name), kind: src.kind, layers };
+    doc.execute("Duplicate Symbol", vec![Edit::InsertSymbol { index: doc.project.symbols.len(), symbol: copy }])?;
+    Ok(id)
+}
+
+pub fn delete_symbol(doc: &mut Document, symbol: SymbolId) -> Result<()> {
+    doc.project.require_symbol(symbol)?;
+    doc.execute("Delete Symbol", vec![Edit::RemoveSymbol { symbol }])
+}
+
+/// Points instances at another symbol, keeping their transforms.
+pub fn swap_symbol(doc: &mut Document, ids: &[ElementId], symbol: SymbolId) -> Result<()> {
+    doc.project.require_symbol(symbol)?;
+    let mut edits = Vec::new();
+    for id in ids {
+        let mut e = doc.project.require_element(*id)?.clone();
+        let ElementKind::Instance { symbol: s, .. } = &mut e.kind else {
+            return Err(Error::Invalid("only symbol instances can be swapped".into()));
+        };
+        *s = symbol;
+        edits.push(Edit::ReplaceElement { element: e });
+    }
+    doc.execute("Swap Symbol", edits)
+}
+
+/// Places a new instance of `symbol` at `at` (symbol-space of the layer's
+/// symbol) on top of `layer` at `frame`.
+pub fn place_instance(doc: &mut Document, layer: LayerId, symbol: SymbolId, at: Point, frame: u32) -> Result<ElementId> {
+    check_target_layer(&doc.project, layer)?;
+    doc.project.require_symbol(symbol)?;
+    let mut e = Element::new(ElementId(doc.project.alloc_id()), ElementKind::instance(symbol));
+    e.transform = Transform::at(at.x, at.y);
+    let id = e.id;
+    let edits = place_on_top(&doc.project, layer, frame, vec![e])?;
+    doc.execute("Place Instance", edits)?;
+    Ok(id)
 }

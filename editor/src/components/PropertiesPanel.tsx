@@ -12,6 +12,10 @@ import {
   type StrokeData,
   type Tween,
   type TweenKind,
+  type LibraryItem,
+  type LoopMode,
+  SYMBOL_KIND_ICON,
+  SYMBOL_KIND_LABEL,
 } from "../engine";
 import { ColorField, NumberField } from "./fields";
 import { GradientEditor } from "./GradientEditor";
@@ -25,6 +29,8 @@ interface Props {
   layers: LayerNode[];
   /** Timeline cell last clicked; shows frame/tween properties when set. */
   frameTarget: { layer: LayerNode; frame: number } | null;
+  library: LibraryItem[];
+  onEditInstance: (id: number) => void;
   /** Runs a core command, reporting errors and refreshing views. */
   run: (fn: () => unknown) => void;
 }
@@ -55,7 +61,7 @@ function kindLabel(info: ElementInfo): string {
   return { rect: "Rectangle", ellipse: "Ellipse", line: "Line", path: "Path" }[e.geometry!.kind];
 }
 
-export function PropertiesPanel({ engine, selection, stage, layers, frameTarget, run }: Props) {
+export function PropertiesPanel({ engine, selection, stage, layers, frameTarget, library, onEditInstance, run }: Props) {
   const [toStage, setToStage] = useState(false);
   const infos: ElementInfo[] = selection.map((id) => JSON.parse(engine.elementJson(id))).filter(Boolean);
   const ids = JSON.stringify(selection);
@@ -78,6 +84,10 @@ export function PropertiesPanel({ engine, selection, stage, layers, frameTarget,
       <div className="panel-title">{single ? kindLabel(first) : `${infos.length} objects`}</div>
       {infos.some((i) => i.tweened) && (
         <p className="hint warn">This frame is tweened: values below edit the tween's start keyframe. Insert a keyframe here (F6) to pose it.</p>
+      )}
+
+      {single && e.type === "instance" && (
+        <InstanceSection engine={engine} info={first} library={library} run={run} onEdit={() => onEditInstance(e.id)} />
       )}
 
       {single && (
@@ -509,5 +519,55 @@ function FramePanel({ engine, target, run }: { engine: Engine; target: { layer: 
         )}
       </section>
     </div>
+  );
+}
+
+function InstanceSection(props: { engine: Engine; info: ElementInfo; library: LibraryItem[]; run: Props["run"]; onEdit: () => void }) {
+  const { engine, info, library, run, onEdit } = props;
+  const e = info.element;
+  const sym = library.find((l) => l.id === e.symbol);
+  const ids = JSON.stringify([e.id]);
+  return (
+    <section>
+      <h4>
+        Symbol
+        <button className="mini" title="Edit in place (double-click / ⌘E)" onClick={onEdit}>
+          edit
+        </button>
+      </h4>
+      <div className="row">
+        <span className="field-label">{sym ? `${SYMBOL_KIND_ICON[sym.kind]} ${SYMBOL_KIND_LABEL[sym.kind]}` : ""}</span>
+        <select value={e.symbol} title="Swap symbol (keeps the transform)" onChange={(ev) => run(() => engine.swapSymbol(ids, Number(ev.target.value)))}>
+          {library.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {sym?.kind === "graphic" && (
+        <div className="grid2" style={{ marginTop: 6 }}>
+          <label className="field">
+            <span className="field-label">Play</span>
+            <select value={e.loopMode ?? "loop"} onChange={(ev) => run(() => engine.patchElements(ids, JSON.stringify({ loopMode: ev.target.value as LoopMode })))}>
+              <option value="loop">Loop</option>
+              <option value="playOnce">Play once</option>
+              <option value="singleFrame">Single frame</option>
+            </select>
+          </label>
+          <NumberField
+            label="First"
+            precision={0}
+            min={1}
+            max={sym.length}
+            title="Frame of the symbol shown when this keyframe starts"
+            value={(e.firstFrame ?? 0) + 1}
+            onCommit={(v) => run(() => engine.patchElements(ids, JSON.stringify({ firstFrame: Math.max(0, v - 1) })))}
+          />
+        </div>
+      )}
+      {sym?.kind === "movieClip" && <p className="hint flush">Runs its own timeline from when it appears (see it with ▶ play).</p>}
+      {sym?.kind === "button" && <p className="hint flush">Up / Over / Down / Hit frames. Hover and press it while playing (▶).</p>}
+    </section>
   );
 }

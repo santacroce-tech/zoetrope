@@ -79,7 +79,7 @@ pub fn element_info(project: &Project, id: ElementId, frame: u32) -> Option<Elem
     let content = content_bounds(project, &e.kind, &crate::math::Matrix::IDENTITY, frame, 0);
     let source_name = match e.kind {
         ElementKind::Bitmap { asset } => project.asset(asset).map(|a| a.name.clone()),
-        ElementKind::Instance { symbol } => project.symbol(symbol).map(|s| s.name.clone()),
+        ElementKind::Instance { symbol, .. } => project.symbol(symbol).map(|s| s.name.clone()),
         ElementKind::Shape(_) => None,
     };
     Some(ElementInfo {

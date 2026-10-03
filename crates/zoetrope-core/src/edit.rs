@@ -32,6 +32,11 @@ pub enum Edit {
     SetLayerProps { layer: LayerId, props: LayerProps },
     InsertAsset { index: usize, asset: Asset },
     RemoveAsset { asset: AssetId },
+    /// Adds a symbol definition (with all its contents) to the library.
+    InsertSymbol { index: usize, symbol: Symbol },
+    /// Removes an unused, non-root symbol.
+    RemoveSymbol { symbol: SymbolId },
+    SetSymbolProps { symbol: SymbolId, name: String, kind: SymbolKind },
 }
 
 /// The editable, non-structural fields of a layer.
@@ -189,6 +194,51 @@ impl Edit {
                     return Err(Error::Invalid("asset is still used by elements".into()));
                 }
                 Ok(Edit::InsertAsset { index: i, asset: p.assets.remove(i) })
+            }
+            Edit::InsertSymbol { index, symbol } => {
+                if symbol.id.0 >= p.next_id || p.symbol(symbol.id).is_some() {
+                    return Err(Error::Invalid(format!("symbol id {} is not fresh", symbol.id.0)));
+                }
+                if index > p.symbols.len() {
+                    return Err(Error::Invalid(format!("symbol index {index} out of range")));
+                }
+                if symbol.name.trim().is_empty() {
+                    return Err(Error::Invalid("symbol name cannot be empty".into()));
+                }
+                // Contents are checked against the project with the symbol in
+                // place (elements may reference the symbol's own layers' ids).
+                let id = symbol.id;
+                p.symbols.insert(index, Symbol { layers: Vec::new(), ..symbol.clone() });
+                let mut result = Ok(());
+                for l in &symbol.layers {
+                    if result.is_ok() {
+                        result = check_new_layer(p, id, l);
+                    }
+                }
+                if let Err(e) = result {
+                    p.symbols.remove(index);
+                    return Err(e);
+                }
+                p.symbols[index].layers = symbol.layers;
+                Ok(Edit::RemoveSymbol { symbol: id })
+            }
+            Edit::RemoveSymbol { symbol } => {
+                if symbol == p.root {
+                    return Err(Error::Invalid("the main timeline can't be removed".into()));
+                }
+                let i = p.symbols.iter().position(|s| s.id == symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
+                if p.symbols.iter().any(|s| s.id != symbol && s.instanced_symbols().contains(&symbol)) {
+                    return Err(Error::Invalid("symbol is still used by instances".into()));
+                }
+                Ok(Edit::InsertSymbol { index: i, symbol: p.symbols.remove(i) })
+            }
+            Edit::SetSymbolProps { symbol, name, kind } => {
+                if name.trim().is_empty() {
+                    return Err(Error::Invalid("symbol name cannot be empty".into()));
+                }
+                let s = p.symbol_mut(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
+                let old = Edit::SetSymbolProps { symbol, name: std::mem::replace(&mut s.name, name), kind: std::mem::replace(&mut s.kind, kind) };
+                Ok(old)
             }
         }
     }

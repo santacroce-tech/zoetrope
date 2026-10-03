@@ -13,8 +13,7 @@ use crate::color::{Color, ColorTransform};
 use crate::geom::Path;
 use crate::math::Matrix;
 use crate::model::*;
-use crate::query::child_frame;
-use crate::timeline::{evaluate_layer, is_tweened_frame};
+use crate::timeline::{evaluate_layer_shown, instance_frame, is_tweened_frame, Shown};
 
 /// Per-frame setup handed to the backend.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +86,18 @@ fn onion_alpha() -> f64 {
 /// frame and options always produce the same sequence of renderer calls.
 ///
 pub fn render_frame(project: &Project, frame: u32, opts: RenderOptions, r: &mut dyn Renderer) {
+    render_with_clock(project, frame, opts, &Stateless, r);
+}
+
+/// Renders the root timeline at `frame`, taking nested symbols' frames from `clock`.
+pub fn render_with_clock(project: &Project, frame: u32, opts: RenderOptions, clock: &dyn Clock, r: &mut dyn Renderer) {
+    begin(project, &opts, r);
+    let ctx = Ctx::new(project, project.root, opts, clock, &[]);
+    ctx.symbol(project.root, frame, opts.view, &ColorTransform::IDENTITY, 0, &mut Vec::new(), None, r);
+    r.end_frame();
+}
+
+fn begin(project: &Project, opts: &RenderOptions, r: &mut dyn Renderer) {
     r.begin_frame(&FrameInfo {
         stage_width: project.stage.width,
         stage_height: project.stage.height,
@@ -94,46 +105,125 @@ pub fn render_frame(project: &Project, frame: u32, opts: RenderOptions, r: &mut 
         view: opts.view,
         clip_to_stage: opts.clip_to_stage,
     });
-    let ctx = Ctx { project, opts, onion_length: project.symbol(project.root).map_or(1, |s| s.length()) };
-    ctx.symbol(project.root, frame, opts.view, &ColorTransform::IDENTITY, 0, r);
+}
+
+/// What the editor shows while editing a symbol.
+#[derive(Debug, Clone)]
+pub struct EditView<'a> {
+    /// Instances from the root down to the edited one (empty when editing a
+    /// symbol from the library, i.e. without context).
+    pub path: &'a [ElementId],
+    /// Root frame the context is shown at.
+    pub root_frame: u32,
+    pub symbol: SymbolId,
+    /// Frame of the edited symbol's timeline.
+    pub frame: u32,
+    /// Edited symbol's space → stage.
+    pub matrix: Matrix,
+    /// Opacity of the surrounding (dimmed) scene.
+    pub context_alpha: f64,
+}
+
+/// Edit-in-place view: the rest of the scene dimmed (without the edited
+/// instance), then the edited symbol on top at full strength.
+pub fn render_editing(project: &Project, view: &EditView, opts: RenderOptions, r: &mut dyn Renderer) {
+    begin(project, &opts, r);
+    if !view.path.is_empty() {
+        let context_opts = RenderOptions { onion: None, ..opts };
+        let ctx = Ctx::new(project, project.root, context_opts, &Stateless, view.path);
+        r.begin_group(BlendMode::Layer, view.context_alpha.clamp(0.0, 1.0));
+        ctx.symbol(project.root, view.root_frame, opts.view, &ColorTransform::IDENTITY, 0, &mut Vec::new(), Some(0), r);
+        r.end_group();
+    }
+    let ctx = Ctx::new(project, view.symbol, opts, &Stateless, &[]);
+    ctx.symbol(view.symbol, view.frame, opts.view * view.matrix, &ColorTransform::IDENTITY, 0, &mut Vec::new(), None, r);
     r.end_frame();
+}
+
+/// Identifies an instance in the display tree: `(layer id, element track)`
+/// for each nesting level from the root timeline down.
+pub type InstancePath = Vec<(u32, u32)>;
+
+/// Where nested symbols get their frames.
+pub trait Clock {
+    /// The frame the instance at `path` (a `kind` symbol) shows, given the
+    /// stateless timing rule's answer. Must be < the symbol's length; callers clamp.
+    fn frame(&self, path: &[(u32, u32)], kind: SymbolKind, stateless: u32) -> u32;
+}
+
+/// Timing derived purely from the timeline (editing, scrubbing, export of a
+/// single frame): see `timeline::instance_frame`.
+pub struct Stateless;
+
+impl Clock for Stateless {
+    fn frame(&self, _: &[(u32, u32)], _: SymbolKind, stateless: u32) -> u32 {
+        stateless
+    }
 }
 
 struct Ctx<'a> {
     project: &'a Project,
     opts: RenderOptions,
-    /// Root timeline length (onion frames never wrap past it).
+    clock: &'a dyn Clock,
+    /// Length of the top timeline (onion frames never wrap past it).
     onion_length: u32,
+    /// Instance path to leave out (edit-in-place context).
+    exclude: &'a [ElementId],
 }
 
-impl Ctx<'_> {
-    fn symbol(&self, id: SymbolId, frame: u32, m: Matrix, ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
+impl<'a> Ctx<'a> {
+    fn new(project: &'a Project, top: SymbolId, opts: RenderOptions, clock: &'a dyn Clock, exclude: &'a [ElementId]) -> Self {
+        Ctx { project, opts, clock, onion_length: project.symbol(top).map_or(1, |s| s.length()), exclude }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn symbol(
+        &self,
+        id: SymbolId,
+        frame: u32,
+        m: Matrix,
+        ct: &ColorTransform,
+        depth: usize,
+        path: &mut InstancePath,
+        excl: Option<usize>,
+        r: &mut dyn Renderer,
+    ) {
         if depth > MAX_NESTING_DEPTH {
             return;
         }
         let Some(symbol) = self.project.symbol(id) else { return };
-        self.layers(&symbol.layers, frame, m, ct, depth, r);
+        self.layers(&symbol.layers, frame, m, ct, depth, path, excl, r);
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn layers(&self, layers: &[Layer], frame: u32, m: Matrix, ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
+    fn layers(
+        &self,
+        layers: &[Layer],
+        frame: u32,
+        m: Matrix,
+        ct: &ColorTransform,
+        depth: usize,
+        path: &mut InstancePath,
+        excl: Option<usize>,
+        r: &mut dyn Renderer,
+    ) {
         for layer in layers.iter().filter(|l| l.visible) {
             match layer.kind {
-                LayerKind::Folder => self.layers(&layer.children, frame, m, ct, depth, r),
+                LayerKind::Folder => self.layers(&layer.children, frame, m, ct, depth, path, excl, r),
                 LayerKind::Guide if !self.opts.show_guides => {}
                 LayerKind::Guide | LayerKind::Normal => {
                     if depth == 0 && !layer.locked {
                         self.onion_ghosts(layer, frame, m, r);
                     }
-                    for el in evaluate_layer(layer, frame) {
-                        self.element(&el, frame, m, ct, depth, r);
+                    for shown in evaluate_layer_shown(layer, frame) {
+                        self.element(&shown, layer.id, frame, m, ct, depth, path, excl, r);
                     }
                 }
             }
         }
     }
 
-    /// Faded neighbouring frames of one root layer (see `Onion`).
+    /// Faded neighbouring frames of one top-level layer (see `Onion`).
     fn onion_ghosts(&self, layer: &Layer, frame: u32, m: Matrix, r: &mut dyn Renderer) {
         let Some(onion) = self.opts.onion else { return };
         let current = layer.keyframe_at(frame).map(|(i, _)| i);
@@ -148,8 +238,8 @@ impl Ctx<'_> {
             let alpha = onion.alpha.clamp(0.0, 1.0) * (n - k + 1) as f64 / n as f64;
             let ct = ColorTransform::tint(tint, 0.45);
             r.begin_group(BlendMode::Layer, alpha);
-            for el in evaluate_layer(layer, f) {
-                self.element(&el, f, m, &ct, 0, r);
+            for shown in evaluate_layer_shown(layer, f) {
+                self.element(&shown, layer.id, f, m, &ct, 0, &mut Vec::new(), None, r);
             }
             r.end_group();
         };
@@ -166,7 +256,29 @@ impl Ctx<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn element(&self, el: &Element, frame: u32, parent: Matrix, parent_ct: &ColorTransform, depth: usize, r: &mut dyn Renderer) {
+    fn element(
+        &self,
+        shown: &Shown,
+        layer: LayerId,
+        frame: u32,
+        parent: Matrix,
+        parent_ct: &ColorTransform,
+        depth: usize,
+        path: &mut InstancePath,
+        excl: Option<usize>,
+        r: &mut dyn Renderer,
+    ) {
+        let el = &shown.element;
+        // Edit-in-place context: skip the edited instance, follow its path.
+        let child_excl = match excl {
+            Some(k) if self.exclude.get(k) == Some(&el.id) => {
+                if k + 1 == self.exclude.len() {
+                    return;
+                }
+                Some(k + 1)
+            }
+            _ => None,
+        };
         let m = parent * el.transform.matrix();
         let grouped = el.blend != BlendMode::Normal;
         // A group applies the element's opacity when compositing, so content
@@ -197,9 +309,13 @@ impl Ctx<'_> {
                     r.draw_image(*asset, width as f64, height as f64, &m, &ct);
                 }
             }
-            ElementKind::Instance { symbol } => {
+            ElementKind::Instance { symbol, .. } => {
                 if let Some(child) = self.project.symbol(*symbol) {
-                    self.symbol(*symbol, child_frame(child, frame), m, &ct, depth + 1, r);
+                    path.push((layer.0, el.track()));
+                    let stateless = instance_frame(child, &el.kind, shown, frame);
+                    let f = self.clock.frame(path, child.kind, stateless).min(child.length() - 1);
+                    self.symbol(*symbol, f, m, &ct, depth + 1, path, child_excl, r);
+                    path.pop();
                 }
             }
         }

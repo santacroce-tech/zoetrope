@@ -103,6 +103,9 @@ export interface ElementData {
   fillRule?: FillRule;
   symbol?: number;
   asset?: number;
+  /** Graphic instances: frame shown when the parent keyframe starts. */
+  firstFrame?: number;
+  loopMode?: LoopMode;
 }
 
 export interface ElementInfo {
@@ -306,3 +309,27 @@ export interface Onion {
   after: number;
   alpha: number;
 }
+
+// ---------- Phase 5: symbols ----------
+
+export type SymbolKind = "graphic" | "movieClip" | "button";
+export type LoopMode = "loop" | "playOnce" | "singleFrame";
+
+export interface LibraryItem {
+  id: number;
+  name: string;
+  kind: SymbolKind;
+  uses: number;
+  length: number;
+}
+
+export interface Crumb {
+  label: string;
+  kind: SymbolKind | null;
+}
+
+export const SYMBOL_KIND_LABEL: Record<SymbolKind, string> = { graphic: "Graphic", movieClip: "Movie clip", button: "Button" };
+export const SYMBOL_KIND_ICON: Record<SymbolKind, string> = { graphic: "◇", movieClip: "🎞", button: "⏺" };
+
+/** Drag-and-drop type for library symbols dropped onto the stage. */
+export const SYMBOL_DRAG_TYPE = "application/x-zoetrope-symbol";
