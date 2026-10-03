@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zoetrope",
+  "version": "0.1.0",
+  "identifier": "app.zoetrope.editor",
+  "build": {
+    "beforeDevCommand": "npm run wasm && npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run wasm && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      { "title": "Zoetrope", "width": 1400, "height": 860, "minWidth": 900, "minHeight": 560, "dragDropEnabled": false }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost",
+      "devCsp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+  }
+}

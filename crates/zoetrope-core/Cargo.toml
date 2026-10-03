@@ -1,0 +1,10 @@
+[package]
+name = "zoetrope-core"
+description = "Scene graph, timeline, geometry, rendering pipeline and project format for Zoetrope."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

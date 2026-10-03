@@ -1,0 +1,452 @@
+//! JS-facing API over `zoetrope-core`.
+//!
+//! Boundary contract (see docs/ARCHITECTURE.md): structured data crosses as
+//! JSON strings, ids as plain numbers (u32), coordinates as stage-space
+//! numbers, errors as thrown `Error`s that leave the document unchanged. The
+//! frontend holds no model state of its own; after every mutation it
+//! re-reads what it displays and re-renders.
+
+mod canvas2d;
+
+pub use canvas2d::{Canvas2dRenderer, CanvasPool};
+
+use serde::de::DeserializeOwned;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::{CanvasRenderingContext2d, ImageBitmap};
+use zoetrope_core::asset::AssetKind;
+use zoetrope_core::geom::Rect;
+use zoetrope_core::interact::{shape_from_drag, snap_point, DragMode, Modifiers, ShapeTool, SnapConfig, SnapTargets, TransformSession};
+use zoetrope_core::ops::{self, Align, Arrange, Distribute, LayerPatch, ShapeStyle};
+use zoetrope_core::query::{self, Scope};
+use zoetrope_core::render::{render_frame, RenderOptions};
+use zoetrope_core::{demo, format, outline, AssetId, Document, ElementId, Error, LayerId, LayerKind, Matrix, Point, Project, Stage};
+
+#[derive(Default)]
+struct ImageCache {
+    bitmaps: HashMap<AssetId, ImageBitmap>,
+    failed: HashSet<AssetId>,
+}
+
+#[wasm_bindgen]
+pub struct Engine {
+    doc: Document,
+    session: Option<TransformSession>,
+    images: Rc<RefCell<ImageCache>>,
+    /// Bumped when the document is replaced, so in-flight decodes for the
+    /// old document are discarded.
+    generation: Rc<Cell<u32>>,
+    pool: RefCell<CanvasPool>,
+}
+
+fn js_err(e: Error) -> JsError {
+    JsError::new(&e.to_string())
+}
+
+fn parse<T: DeserializeOwned>(what: &str, json: &str) -> Result<T, JsError> {
+    serde_json::from_str(json).map_err(|e| JsError::new(&format!("bad {what}: {e}")))
+}
+
+fn ids(json: &str) -> Result<Vec<ElementId>, JsError> {
+    Ok(parse::<Vec<u32>>("id list", json)?.into_iter().map(ElementId).collect())
+}
+
+fn to_json<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_string(v).expect("serializable")
+}
+
+#[wasm_bindgen]
+impl Engine {
+    /// Creates an engine holding the built-in demo project.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Engine {
+        Engine {
+            doc: Document::new(demo::demo_project()),
+            session: None,
+            images: Rc::default(),
+            generation: Rc::default(),
+            pool: RefCell::default(),
+        }
+    }
+
+    fn replace_document(&mut self, project: Project) {
+        self.doc = Document::new(project);
+        self.session = None;
+        *self.images.borrow_mut() = ImageCache::default();
+        self.generation.set(self.generation.get() + 1);
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::root(&self.doc.project)
+    }
+
+    /// Draws `frame` into `ctx`. `scale`/`offset_*` map stage units to canvas
+    /// pixels (device-pixel-ratio already applied by the caller).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &self,
+        ctx: &CanvasRenderingContext2d,
+        frame: u32,
+        scale: f64,
+        offset_x: f64,
+        offset_y: f64,
+        clip: bool,
+        show_guides: bool,
+    ) {
+        let view = Matrix::translate(offset_x, offset_y) * Matrix::scale(scale, scale);
+        let images = self.images.borrow();
+        let mut pool = self.pool.borrow_mut();
+        let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
+        render_frame(&self.doc.project, frame, RenderOptions { view, clip_to_stage: clip, show_guides }, &mut r);
+    }
+
+    /// Decodes embedded images that are not decoded yet. Resolves to the
+    /// number decoded; re-render afterwards. Undecodable images are skipped
+    /// (they render as placeholders) and reported on the console.
+    #[wasm_bindgen(js_name = decodeImages)]
+    pub fn decode_images(&self) -> js_sys::Promise {
+        let cache = self.images.borrow();
+        let pending: Vec<_> = self
+            .doc
+            .project
+            .assets
+            .iter()
+            .filter(|a| !cache.bitmaps.contains_key(&a.id) && !cache.failed.contains(&a.id))
+            .map(|a| {
+                let AssetKind::Image { mime, data, .. } = &a.kind;
+                (a.id, a.name.clone(), mime.clone(), data.clone())
+            })
+            .collect();
+        drop(cache);
+        let images = self.images.clone();
+        let generation = self.generation.clone();
+        let started = generation.get();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let mut decoded = 0;
+            for (id, name, mime, data) in pending {
+                match decode(&mime, &data.0).await {
+                    Ok(bmp) if generation.get() == started => {
+                        images.borrow_mut().bitmaps.insert(id, bmp);
+                        decoded += 1;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        web_sys::console::warn_2(&format!("could not decode image {name:?}:").into(), &e);
+                        if generation.get() == started {
+                            images.borrow_mut().failed.insert(id);
+                        }
+                    }
+                }
+            }
+            Ok(JsValue::from(decoded))
+        })
+    }
+
+    // ----- documents -----
+
+    #[wasm_bindgen(js_name = newDemo)]
+    pub fn new_demo(&mut self) {
+        self.replace_document(demo::demo_project());
+    }
+
+    /// Serializes the project in the versioned file format.
+    #[wasm_bindgen(js_name = saveJson)]
+    pub fn save_json(&self) -> String {
+        format::save_to_string(&self.doc.project)
+    }
+
+    /// Replaces the document (and clears history). Leaves the current
+    /// document untouched if the file is invalid.
+    #[wasm_bindgen(js_name = loadJson)]
+    pub fn load_json(&mut self, json: &str) -> Result<(), JsError> {
+        let project = format::load_from_str(json).map_err(js_err)?;
+        self.replace_document(project);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = markSaved)]
+    pub fn mark_saved(&mut self) {
+        self.doc.mark_saved();
+    }
+
+    // ----- queries (JSON) -----
+
+    #[wasm_bindgen(js_name = rootSymbol)]
+    pub fn root_symbol(&self) -> u32 {
+        self.doc.project.root.0
+    }
+
+    #[wasm_bindgen(js_name = stageJson)]
+    pub fn stage_json(&self) -> String {
+        to_json(&self.doc.project.stage)
+    }
+
+    /// Layer tree of the edited symbol, top layer first.
+    #[wasm_bindgen(js_name = layersJson)]
+    pub fn layers_json(&self) -> String {
+        to_json(&outline::layer_tree(&self.doc.project, self.scope().symbol))
+    }
+
+    /// `{ canUndo, canRedo, undoLabel, redoLabel, dirty }`
+    #[wasm_bindgen(js_name = historyJson)]
+    pub fn history_json(&self) -> String {
+        serde_json::json!({
+            "canUndo": self.doc.undo_label().is_some(),
+            "canRedo": self.doc.redo_label().is_some(),
+            "undoLabel": self.doc.undo_label(),
+            "redoLabel": self.doc.redo_label(),
+            "dirty": self.doc.is_dirty(),
+        })
+        .to_string()
+    }
+
+    /// Element + derived info for the properties panel, or `null`.
+    #[wasm_bindgen(js_name = elementJson)]
+    pub fn element_json(&self, id: u32) -> String {
+        to_json(&outline::element_info(&self.doc.project, ElementId(id)))
+    }
+
+    /// Handle geometry for a selection (JSON id list), or `null`.
+    #[wasm_bindgen(js_name = selectionJson)]
+    pub fn selection_json(&self, ids_json: &str) -> Result<String, JsError> {
+        let ids = ids(ids_json)?;
+        Ok(to_json(&query::selection_geometry(&self.doc.project, &self.scope(), &ids)))
+    }
+
+    /// Topmost selectable element at a stage point (`tolerance` in stage units).
+    #[wasm_bindgen(js_name = hitTest)]
+    pub fn hit_test(&self, x: f64, y: f64, tolerance: f64) -> Option<u32> {
+        query::hit_test(&self.doc.project, &self.scope(), Point::new(x, y), tolerance).map(|e| e.0)
+    }
+
+    /// Ids (JSON) of selectable elements touching the stage rectangle.
+    pub fn marquee(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+        let ids: Vec<u32> =
+            query::marquee(&self.doc.project, &self.scope(), Rect::new(x0, y0, x1, y1)).into_iter().map(|e| e.0).collect();
+        to_json(&ids)
+    }
+
+    /// Ids (JSON) of every selectable element in the edited symbol.
+    #[wasm_bindgen(js_name = selectAll)]
+    pub fn select_all(&self) -> String {
+        let ids: Vec<u32> = query::selectable(&self.doc.project, &self.scope()).iter().map(|e| e.id.0).collect();
+        to_json(&ids)
+    }
+
+    /// Drops ids that no longer exist or are no longer selectable (after
+    /// undo, layer locks, etc.). Returns the filtered JSON id list.
+    #[wasm_bindgen(js_name = validSelection)]
+    pub fn valid_selection(&self, ids_json: &str) -> Result<String, JsError> {
+        let wanted = ids(ids_json)?;
+        let selectable: HashSet<u32> = query::selectable(&self.doc.project, &self.scope()).iter().map(|e| e.id.0).collect();
+        let kept: Vec<u32> = wanted.into_iter().map(|e| e.0).filter(|id| selectable.contains(id)).collect();
+        Ok(to_json(&kept))
+    }
+
+    // ----- direct manipulation -----
+
+    /// Starts a drag. `mode_json`: `{"mode":"move"}`, `{"mode":"scale","handle":"se"}`,
+    /// `{"mode":"rotate"}`, `{"mode":"skew","handle":"n"}`, `{"mode":"pivot"}`.
+    #[wasm_bindgen(js_name = beginTransform)]
+    pub fn begin_transform(&mut self, ids_json: &str, mode_json: &str, x: f64, y: f64) -> Result<(), JsError> {
+        let ids = ids(ids_json)?;
+        let mode: DragMode = parse("drag mode", mode_json)?;
+        self.cancel_transform();
+        let s = TransformSession::begin(&self.doc.project, self.scope(), &ids, mode, Point::new(x, y)).map_err(js_err)?;
+        self.session = Some(s);
+        Ok(())
+    }
+
+    /// Previews the drag at a stage point. Returns snap guides as JSON.
+    #[wasm_bindgen(js_name = updateTransform)]
+    pub fn update_transform(&mut self, x: f64, y: f64, mods_json: &str, snap_json: &str) -> Result<String, JsError> {
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        let snap: SnapConfig = parse("snap config", snap_json)?;
+        let s = self.session.as_ref().ok_or_else(|| JsError::new("no drag in progress"))?;
+        Ok(to_json(&s.update(&mut self.doc.project, Point::new(x, y), mods, &snap)))
+    }
+
+    /// Commits the drag as one undo step.
+    #[wasm_bindgen(js_name = endTransform)]
+    pub fn end_transform(&mut self) -> Result<(), JsError> {
+        match self.session.take() {
+            Some(s) => s.commit(&mut self.doc).map_err(js_err),
+            None => Ok(()),
+        }
+    }
+
+    #[wasm_bindgen(js_name = cancelTransform)]
+    pub fn cancel_transform(&mut self) {
+        if let Some(s) = self.session.take() {
+            s.cancel(&mut self.doc.project);
+        }
+    }
+
+    /// Snaps a stage point for drawing tools. Returns `{ x, y, guides }`.
+    #[wasm_bindgen(js_name = snapPoint)]
+    pub fn snap_point(&self, x: f64, y: f64, snap_json: &str) -> Result<String, JsError> {
+        let snap: SnapConfig = parse("snap config", snap_json)?;
+        let targets = SnapTargets::collect(&self.doc.project, &self.scope(), &[]);
+        let (p, guides) = snap_point(Point::new(x, y), &targets, &snap);
+        Ok(serde_json::json!({ "x": p.x, "y": p.y, "guides": guides }).to_string())
+    }
+
+    /// The shape a drawing-tool drag would create (for the live preview), or `null`.
+    #[wasm_bindgen(js_name = shapePreview)]
+    pub fn shape_preview(&self, tool: &str, x0: f64, y0: f64, x1: f64, y1: f64, mods_json: &str) -> Result<String, JsError> {
+        let tool: ShapeTool = parse("tool", &format!("{tool:?}"))?;
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        Ok(to_json(&shape_from_drag(tool, Point::new(x0, y0), Point::new(x1, y1), mods)))
+    }
+
+    // ----- commands -----
+
+    pub fn undo(&mut self) -> Result<bool, JsError> {
+        self.cancel_transform();
+        self.doc.undo().map_err(js_err)
+    }
+
+    pub fn redo(&mut self) -> Result<bool, JsError> {
+        self.cancel_transform();
+        self.doc.redo().map_err(js_err)
+    }
+
+    /// Creates a shape from a drawing-tool drag on top of `layer`. Returns the
+    /// new id, or `undefined` if the drag was too small.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createShape)]
+    pub fn create_shape(
+        &mut self,
+        layer: u32,
+        tool: &str,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        mods_json: &str,
+        style_json: &str,
+    ) -> Result<Option<u32>, JsError> {
+        let tool: ShapeTool = parse("tool", &format!("{tool:?}"))?;
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        let style: ShapeStyle = parse("style", style_json)?;
+        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, Point::new(x0, y0), Point::new(x1, y1), mods, &style)
+            .map_err(js_err)?;
+        Ok(id.map(|e| e.0))
+    }
+
+    /// Embeds image bytes (PNG/JPEG/GIF) and places them centered at (x, y)
+    /// on `layer`. Call `decodeImages()` afterwards.
+    #[wasm_bindgen(js_name = importImage)]
+    pub fn import_image(&mut self, layer: u32, name: &str, bytes: &[u8], x: f64, y: f64) -> Result<u32, JsError> {
+        ops::import_image(&mut self.doc, LayerId(layer), name, bytes, Point::new(x, y)).map(|e| e.0).map_err(js_err)
+    }
+
+    /// Merges a JSON patch into each element (see `ops::patch_element`).
+    #[wasm_bindgen(js_name = patchElements)]
+    pub fn patch_elements(&mut self, ids_json: &str, patch_json: &str) -> Result<(), JsError> {
+        let ids = ids(ids_json)?;
+        let patch: serde_json::Value = parse("patch", patch_json)?;
+        ops::patch_elements(&mut self.doc, &ids, &patch).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = setElementSize)]
+    pub fn set_element_size(&mut self, id: u32, width: f64, height: f64) -> Result<(), JsError> {
+        ops::set_element_size(&mut self.doc, ElementId(id), width, height).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = translateElements)]
+    pub fn translate_elements(&mut self, ids_json: &str, dx: f64, dy: f64) -> Result<(), JsError> {
+        ops::translate_elements(&mut self.doc, &ids(ids_json)?, dx, dy).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = deleteElements)]
+    pub fn delete_elements(&mut self, ids_json: &str) -> Result<(), JsError> {
+        ops::delete_elements(&mut self.doc, &ids(ids_json)?).map_err(js_err)
+    }
+
+    /// Returns the new ids (JSON).
+    #[wasm_bindgen(js_name = duplicateElements)]
+    pub fn duplicate_elements(&mut self, ids_json: &str, dx: f64, dy: f64) -> Result<String, JsError> {
+        let new = ops::duplicate_elements(&mut self.doc, &ids(ids_json)?, dx, dy).map_err(js_err)?;
+        Ok(to_json(&new.iter().map(|e| e.0).collect::<Vec<_>>()))
+    }
+
+    /// `mode`: left | centerX | right | top | centerY | bottom.
+    pub fn align(&mut self, ids_json: &str, mode: &str, to_stage: bool) -> Result<(), JsError> {
+        let mode: Align = parse("align mode", &format!("{mode:?}"))?;
+        ops::align(&mut self.doc, &ids(ids_json)?, mode, to_stage).map_err(js_err)
+    }
+
+    /// `mode`: centersX | centersY | spaceX | spaceY.
+    pub fn distribute(&mut self, ids_json: &str, mode: &str, to_stage: bool) -> Result<(), JsError> {
+        let mode: Distribute = parse("distribute mode", &format!("{mode:?}"))?;
+        ops::distribute(&mut self.doc, &ids(ids_json)?, mode, to_stage).map_err(js_err)
+    }
+
+    /// `op`: front | forward | backward | back.
+    pub fn arrange(&mut self, ids_json: &str, op: &str) -> Result<(), JsError> {
+        let op: Arrange = parse("arrange op", &format!("{op:?}"))?;
+        ops::arrange(&mut self.doc, &ids(ids_json)?, op).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = moveToLayer)]
+    pub fn move_to_layer(&mut self, ids_json: &str, layer: u32) -> Result<(), JsError> {
+        ops::move_to_layer(&mut self.doc, &ids(ids_json)?, LayerId(layer)).map_err(js_err)
+    }
+
+    /// Replaces the stage settings: `{ width, height, background, fps }`.
+    #[wasm_bindgen(js_name = setStage)]
+    pub fn set_stage(&mut self, stage_json: &str) -> Result<(), JsError> {
+        let stage: Stage = parse("stage", stage_json)?;
+        ops::set_stage(&mut self.doc, stage).map_err(js_err)
+    }
+
+    // ----- layers -----
+
+    /// Adds a layer above `above` (or at the top). `kind`: normal | guide | folder.
+    #[wasm_bindgen(js_name = addLayer)]
+    pub fn add_layer(&mut self, above: Option<u32>, kind: &str) -> Result<u32, JsError> {
+        let kind: LayerKind = parse("layer kind", &format!("{kind:?}"))?;
+        let symbol = self.scope().symbol;
+        ops::add_layer(&mut self.doc, symbol, above.map(LayerId), kind).map(|l| l.0).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = deleteLayer)]
+    pub fn delete_layer(&mut self, id: u32) -> Result<(), JsError> {
+        ops::delete_layer(&mut self.doc, LayerId(id)).map_err(js_err)
+    }
+
+    /// `patch_json`: any of `{ name, visible, locked, kind }`.
+    #[wasm_bindgen(js_name = setLayerProps)]
+    pub fn set_layer_props(&mut self, id: u32, patch_json: &str) -> Result<(), JsError> {
+        let patch: LayerPatch = parse("layer patch", patch_json)?;
+        ops::set_layer_props(&mut self.doc, LayerId(id), &patch).map_err(js_err)
+    }
+
+    /// Moves a layer into folder `parent` (or the top level) at `index`
+    /// (bottom-to-top storage order, counted after removal).
+    #[wasm_bindgen(js_name = moveLayer)]
+    pub fn move_layer(&mut self, id: u32, parent: Option<u32>, index: usize) -> Result<(), JsError> {
+        ops::move_layer(&mut self.doc, LayerId(id), parent.map(LayerId), index).map_err(js_err)
+    }
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+async fn decode(mime: &str, data: &[u8]) -> Result<ImageBitmap, JsValue> {
+    let bytes = js_sys::Uint8Array::from(data);
+    let parts = js_sys::Array::of1(&bytes);
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)?;
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+    let bitmap = wasm_bindgen_futures::JsFuture::from(window.create_image_bitmap_with_blob(&blob)?).await?;
+    bitmap.dyn_into()
+}

@@ -1,0 +1,9 @@
+/target
+node_modules
+/editor/dist
+/editor/src/wasm/pkg
+.DS_Store
+/.playwright-mcp
+/editor/src-tauri/gen
+.vite
+*.tsbuildinfo

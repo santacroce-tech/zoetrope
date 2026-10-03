@@ -1,0 +1,249 @@
+//! Read-only geometric queries over the scene: bounds, hit-testing, marquee
+//! selection and selection geometry for the editor's handles.
+//!
+//! A *scope* is the symbol whose elements are currently selectable (the root
+//! timeline for now; the symbol being edited in place from Phase 5), with the
+//! matrix mapping that symbol's space to stage space.
+
+use crate::asset::AssetKind;
+use crate::geom::Rect;
+use crate::math::{Matrix, Point};
+use crate::model::*;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Scope {
+    pub symbol: SymbolId,
+    /// Symbol space → stage space.
+    pub matrix: Matrix,
+}
+
+impl Scope {
+    pub fn root(p: &Project) -> Scope {
+        Scope { symbol: p.root, matrix: Matrix::IDENTITY }
+    }
+}
+
+/// Uniform scale estimate of a matrix (geometric mean of axis scales).
+pub fn scale_factor(m: &Matrix) -> f64 {
+    m.determinant().abs().sqrt()
+}
+
+/// Bounds of `kind`'s content drawn through `m`. `None` if it draws nothing
+/// (e.g. an empty symbol).
+pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, depth: usize) -> Option<Rect> {
+    match kind {
+        ElementKind::Shape(s) => {
+            let b = s.geometry.to_path().bounds(m)?;
+            let half = s.stroke.as_ref().map_or(0.0, |st| st.width / 2.0 * scale_factor(m));
+            Some(b.inflate(half))
+        }
+        ElementKind::Bitmap { asset } => {
+            let a = p.asset(*asset)?;
+            let AssetKind::Image { width, height, .. } = a.kind;
+            let (w, h) = (width as f64, height as f64);
+            Some(Rect::new(-w / 2.0, -h / 2.0, w / 2.0, h / 2.0).transformed(m))
+        }
+        ElementKind::Instance { symbol } => {
+            if depth > MAX_NESTING_DEPTH {
+                return None;
+            }
+            let sym = p.symbol(*symbol)?;
+            Rect::union_all(sym.content_layers().into_iter().filter(|(_, vis, _)| *vis).flat_map(|(l, _, _)| {
+                l.elements
+                    .iter()
+                    .filter_map(move |e| content_bounds(p, &e.kind, &(*m * e.transform.matrix()), depth + 1))
+            }))
+        }
+    }
+}
+
+/// An element's bounds in its parent symbol's space.
+pub fn element_bounds(p: &Project, e: &Element) -> Option<Rect> {
+    content_bounds(p, &e.kind, &e.transform.matrix(), 0)
+}
+
+/// Topmost selectable element of the scope under stage point `pt`.
+/// `tolerance` is in stage units (callers convert from screen pixels).
+pub fn hit_test(p: &Project, scope: &Scope, pt: Point, tolerance: f64) -> Option<ElementId> {
+    let sym = p.symbol(scope.symbol)?;
+    for (layer, visible, locked) in sym.content_layers().into_iter().rev() {
+        if !visible || locked {
+            continue;
+        }
+        for e in layer.elements.iter().rev() {
+            if hits(p, &e.kind, &(scope.matrix * e.transform.matrix()), pt, tolerance, 0) {
+                return Some(e.id);
+            }
+        }
+    }
+    None
+}
+
+fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, depth: usize) -> bool {
+    match kind {
+        ElementKind::Shape(s) => {
+            let Some(inv) = m.invert() else { return false };
+            let q = inv.apply(pt);
+            let path = s.geometry.to_path();
+            let closed = s.geometry.is_closed();
+            if closed && (s.fill.is_some() || s.stroke.is_none()) && path.contains(q) {
+                return true;
+            }
+            let half = s.stroke.as_ref().map_or(0.0, |st| st.width / 2.0);
+            path.distance_to_outline(q) <= half + tol / scale_factor(m)
+        }
+        ElementKind::Bitmap { asset } => {
+            let (Some(a), Some(inv)) = (p.asset(*asset), m.invert()) else { return false };
+            let AssetKind::Image { width, height, .. } = a.kind;
+            let q = inv.apply(pt);
+            q.x.abs() <= width as f64 / 2.0 && q.y.abs() <= height as f64 / 2.0
+        }
+        ElementKind::Instance { symbol } => {
+            if depth > MAX_NESTING_DEPTH {
+                return false;
+            }
+            let Some(sym) = p.symbol(*symbol) else { return false };
+            sym.content_layers().into_iter().rev().filter(|(_, vis, _)| *vis).any(|(l, _, _)| {
+                l.elements.iter().rev().any(|e| hits(p, &e.kind, &(*m * e.transform.matrix()), pt, tol, depth + 1))
+            })
+        }
+    }
+}
+
+/// Selectable elements of the scope whose stage bounds intersect `rect`,
+/// in render order.
+pub fn marquee(p: &Project, scope: &Scope, rect: Rect) -> Vec<ElementId> {
+    selectable(p, scope)
+        .into_iter()
+        .filter(|e| content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0).is_some_and(|b| b.intersects(&rect)))
+        .map(|e| e.id)
+        .collect()
+}
+
+/// Elements of the scope on visible, unlocked layers, in render order.
+pub fn selectable<'a>(p: &'a Project, scope: &Scope) -> Vec<&'a Element> {
+    let Some(sym) = p.symbol(scope.symbol) else { return Vec::new() };
+    sym.content_layers()
+        .into_iter()
+        .filter(|(_, vis, locked)| *vis && !locked)
+        .flat_map(|(l, _, _)| l.elements.iter())
+        .collect()
+}
+
+/// What the editor needs to draw a selection and its handles.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionGeometry {
+    /// Handle box corners in stage space: TL, TR, BR, BL (box space order).
+    pub corners: [Point; 4],
+    /// Rotation/scale origin in stage space.
+    pub pivot: Point,
+    /// Axis-aligned stage bounds of the whole selection.
+    pub bounds: Rect,
+    /// Per-element axis-aligned stage bounds (for outlining each item).
+    pub items: Vec<Rect>,
+    /// Whether the pivot is the element's own (draggable) pivot.
+    pub has_own_pivot: bool,
+}
+
+/// The handle box's frame (box space → stage) and extent in box space.
+/// A single element uses its own content box (so handles rotate with it);
+/// multiple elements use their combined axis-aligned stage bounds.
+pub fn selection_frame(p: &Project, scope: &Scope, ids: &[ElementId]) -> Option<(Matrix, Rect)> {
+    match ids {
+        [] => None,
+        [id] => {
+            let e = p.element(*id)?;
+            let local = content_bounds(p, &e.kind, &Matrix::IDENTITY, 0)?;
+            Some((scope.matrix * e.transform.matrix(), local))
+        }
+        _ => {
+            let b = Rect::union_all(ids.iter().filter_map(|id| {
+                let e = p.element(*id)?;
+                content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0)
+            }))?;
+            Some((Matrix::IDENTITY, b))
+        }
+    }
+}
+
+pub fn selection_geometry(p: &Project, scope: &Scope, ids: &[ElementId]) -> Option<SelectionGeometry> {
+    let (frame, bx) = selection_frame(p, scope, ids)?;
+    let items: Vec<Rect> = ids
+        .iter()
+        .filter_map(|id| {
+            let e = p.element(*id)?;
+            content_bounds(p, &e.kind, &(scope.matrix * e.transform.matrix()), 0)
+        })
+        .collect();
+    let bounds = Rect::union_all(items.iter().copied())?;
+    let (pivot, has_own_pivot) = match ids {
+        [id] => {
+            let t = p.element(*id)?.transform;
+            (scope.matrix.apply(Point::new(t.x, t.y)), true)
+        }
+        _ => (bx.center(), false),
+    };
+    Some(SelectionGeometry { corners: bx.corners(&frame), pivot, bounds, items, has_own_pivot })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::demo::demo_project;
+
+    fn named(p: &Project, name: &str) -> ElementId {
+        let mut found = None;
+        for s in &p.symbols {
+            walk_layers(&s.layers, &mut |l| {
+                if let Some(e) = l.elements.iter().find(|e| e.name == name) {
+                    found = Some(e.id);
+                }
+            });
+        }
+        found.unwrap()
+    }
+
+    #[test]
+    fn hit_test_finds_topmost_and_recurses_into_instances() {
+        let p = demo_project();
+        let scope = Scope::root(&p);
+        // Center of flower B is on the Flowers layer, above the sky.
+        assert_eq!(hit_test(&p, &scope, Point::new(480.0, 210.0), 0.0), Some(named(&p, "flower B")));
+        // Empty sky area hits the sky rect.
+        assert_eq!(hit_test(&p, &scope, Point::new(100.0, 40.0), 0.0), Some(named(&p, "sky")));
+        // Off stage: nothing.
+        assert_eq!(hit_test(&p, &scope, Point::new(-50.0, -50.0), 0.0), None);
+    }
+
+    #[test]
+    fn locked_and_hidden_layers_are_not_selectable() {
+        let mut p = demo_project();
+        let scope = Scope::root(&p);
+        let flowers = p.locate(named(&p, "flower B")).unwrap().layer;
+        p.layer_mut(flowers).unwrap().locked = true;
+        assert_eq!(hit_test(&p, &scope, Point::new(480.0, 210.0), 0.0), Some(named(&p, "sky")));
+        p.layer_mut(flowers).unwrap().locked = false;
+        p.layer_mut(flowers).unwrap().visible = false;
+        assert_eq!(hit_test(&p, &scope, Point::new(480.0, 210.0), 0.0), Some(named(&p, "sky")));
+    }
+
+    #[test]
+    fn marquee_selects_intersecting() {
+        let p = demo_project();
+        let ids = marquee(&p, &Scope::root(&p), Rect::new(780.0, 60.0, 800.0, 80.0));
+        assert!(ids.contains(&named(&p, "sun")));
+        assert!(ids.contains(&named(&p, "sky")));
+        assert!(!ids.contains(&named(&p, "ground")));
+    }
+
+    #[test]
+    fn single_selection_box_follows_rotation() {
+        let p = demo_project();
+        let sun = named(&p, "sun");
+        let g = selection_geometry(&p, &Scope::root(&p), &[sun]).unwrap();
+        assert!((g.pivot.x - 820.0).abs() < 1e-9);
+        assert!((g.corners[0].x - 765.0).abs() < 1e-6 && (g.corners[0].y - 35.0).abs() < 1e-6);
+    }
+}
