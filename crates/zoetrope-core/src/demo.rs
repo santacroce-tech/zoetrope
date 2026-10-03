@@ -147,6 +147,7 @@ pub fn demo_project() -> Project {
 
     animate(&mut b, scene, sky);
     bees_and_button(&mut b, scene);
+    title_and_tune(&mut b, scene);
 
     debug_assert!(b.project.validate().is_ok());
     b.project
@@ -185,7 +186,7 @@ fn animate(b: &mut Builder, scene: SymbolId, sky: LayerId) {
     let layer = b.project.layer_mut(sky).unwrap();
     layer.keyframes[0].duration = TWEEN;
     layer.keyframes[0].tween = Some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 });
-    layer.keyframes.push(Keyframe { duration: LENGTH - TWEEN, elements: end, tween: None });
+    layer.keyframes.push(Keyframe::with(LENGTH - TWEEN, end));
 }
 
 /// Keyframes for one layer from `(duration, elements, tweened)` triples.
@@ -193,9 +194,8 @@ fn keyframes(spans: Vec<(u32, Vec<Element>, bool)>) -> Vec<Keyframe> {
     spans
         .into_iter()
         .map(|(duration, elements, tweened)| Keyframe {
-            duration,
-            elements,
             tween: tweened.then_some(Tween { kind: TweenKind::Motion, easing: Easing::Preset { name: EasePreset::EaseInOutSine }, rotate: 0 }),
+            ..Keyframe::with(duration, elements)
         })
         .collect()
 }
@@ -262,4 +262,83 @@ fn bees_and_button(b: &mut Builder, scene: SymbolId) {
     let ui = b.layer(Parent::Symbol(scene), "UI", LayerKind::Normal);
     let btn = el(b, "playButton", Transform::at(100.0, 500.0), ElementKind::instance(button));
     b.project.layer_mut(ui).unwrap().keyframes = keyframes(vec![(48, vec![btn], false)]);
+}
+
+/// A title in the bundled font and a two-second chime melody streamed in
+/// sync with the main timeline (both embedded in the project).
+fn title_and_tune(b: &mut Builder, scene: SymbolId) {
+    use crate::asset::{Asset, AssetKind, Bytes};
+    use crate::text::{TextAlign, TextBlock, DEFAULT_FONT, DEFAULT_FONT_NAME};
+
+    let font = AssetId(b.id());
+    b.project.assets.push(Asset {
+        id: font,
+        name: format!("{DEFAULT_FONT_NAME}.ttf"),
+        kind: AssetKind::Font { family: DEFAULT_FONT_NAME.into(), data: Bytes(DEFAULT_FONT.into()) },
+    });
+    let title = b.layer(Parent::Symbol(scene), "Title", LayerKind::Normal);
+    let block = TextBlock {
+        text: "Spring in Zoetrope".into(),
+        font,
+        size: 44.0,
+        fill: Paint::Linear {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(0.0, 50.0),
+            stops: stops(&[(0.0, Color::rgb(0x2b, 0x3a, 0x67)), (1.0, Color::rgb(0x6b, 0x3f, 0x8f))]),
+        },
+        align: TextAlign::Left,
+        letter_spacing: 1.0,
+        line_height: 1.25,
+        width: None,
+    };
+    let mut t = Element::new(ElementId(b.id()), ElementKind::Text(block));
+    t.name = "title".into();
+    t.transform = Transform::at(270.0, 16.0);
+    b.project.layer_mut(title).unwrap().keyframes = vec![Keyframe::with(48, vec![t])];
+
+    let tune = AssetId(b.id());
+    b.project.assets.push(Asset {
+        id: tune,
+        name: "chime.wav".into(),
+        kind: AssetKind::Audio { mime: "audio/wav".into(), duration: 2.0, data: Bytes(chime_wav().into()) },
+    });
+    let sound = b.layer(Parent::Symbol(scene), "Sound", LayerKind::Normal);
+    b.project.layer_mut(sound).unwrap().keyframes =
+        vec![Keyframe { sound: Some(SoundRef { asset: tune, sync: SoundSync::Stream, volume: 0.8, loops: 0 }), ..Keyframe::blank(48) }];
+}
+
+/// A synthesized 2-second, 16-bit mono 22.05 kHz WAV: a little arpeggio of
+/// soft bell tones (deterministic, no external audio needed).
+pub fn chime_wav() -> Vec<u8> {
+    const RATE: u32 = 22_050;
+    let notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 659.25, 523.25, 392.0]; // C E G C G E C G
+    let total = RATE * 2;
+    let step = total as usize / notes.len();
+    let mut samples = vec![0f64; total as usize];
+    for (i, f) in notes.iter().enumerate() {
+        for n in 0..(step * 2).min(samples.len() - i * step) {
+            let t = n as f64 / RATE as f64;
+            let env = (-t * 5.0).exp() * (1.0 - (-t * 400.0).exp());
+            let tone = (std::f64::consts::TAU * f * t).sin() + 0.3 * (std::f64::consts::TAU * f * 2.0 * t).sin();
+            samples[i * step + n] += 0.32 * env * tone;
+        }
+    }
+    let data_len = total * 2;
+    let mut w = Vec::with_capacity(44 + data_len as usize);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data_len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&1u16.to_le_bytes()); // mono
+    w.extend_from_slice(&RATE.to_le_bytes());
+    w.extend_from_slice(&(RATE * 2).to_le_bytes());
+    w.extend_from_slice(&2u16.to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        w.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+    w
 }

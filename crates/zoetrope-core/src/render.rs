@@ -304,9 +304,16 @@ impl<'a> Ctx<'a> {
                 }
             }
             ElementKind::Bitmap { asset } => {
-                if let Some(a) = self.project.asset(*asset) {
-                    let crate::asset::AssetKind::Image { width, height, .. } = a.kind;
-                    r.draw_image(*asset, width as f64, height as f64, &m, &ct);
+                if let Some(crate::asset::AssetKind::Image { width, height, .. }) = self.project.asset(*asset).map(|a| &a.kind) {
+                    r.draw_image(*asset, *width as f64, *height as f64, &m, &ct);
+                }
+            }
+            ElementKind::Text(t) => {
+                if let Some(layout) = self.project.layout_text(t) {
+                    let fill = t.fill.transformed(&ct);
+                    if !fill.is_invisible() && !layout.path.cmds.is_empty() {
+                        r.fill_path(&layout.path, &m, &fill, FillRule::NonZero);
+                    }
                 }
             }
             ElementKind::Instance { symbol, .. } => {

@@ -81,6 +81,16 @@ impl Document {
         }
     }
 
+    /// Undoes the last step and drops it from history (no redo), e.g. to
+    /// abandon an object that was created and then left empty.
+    pub fn undo_discard(&mut self) -> Result<bool> {
+        let undone = self.undo()?;
+        if undone {
+            self.redo_stack.pop();
+        }
+        Ok(undone)
+    }
+
     pub fn undo_label(&self) -> Option<&str> {
         self.undo_stack.last().map(|t| t.label.as_str())
     }

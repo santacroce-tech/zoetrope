@@ -96,7 +96,7 @@ export interface ElementData {
   /** Omitted when normal. */
   blend?: BlendMode;
   tint?: { color: string; amount: number };
-  type: "shape" | "instance" | "bitmap";
+  type: "shape" | "instance" | "bitmap" | "text";
   geometry?: { kind: "rect" | "ellipse" | "line" | "path"; width?: number; height?: number; dx?: number; dy?: number };
   fill?: Paint;
   stroke?: StrokeData;
@@ -106,6 +106,15 @@ export interface ElementData {
   /** Graphic instances: frame shown when the parent keyframe starts. */
   firstFrame?: number;
   loopMode?: LoopMode;
+  // Text elements:
+  text?: string;
+  font?: number;
+  size?: number;
+  align?: TextAlign;
+  letterSpacing?: number;
+  lineHeight?: number;
+  /** Wrap width; absent = auto width. */
+  width?: number;
 }
 
 export interface ElementInfo {
@@ -302,6 +311,7 @@ export interface KeyframeView {
   duration: number;
   empty: boolean;
   tween?: Tween;
+  sound?: SoundRef;
 }
 
 export interface Onion {
@@ -333,3 +343,49 @@ export const SYMBOL_KIND_ICON: Record<SymbolKind, string> = { graphic: "◇", mo
 
 /** Drag-and-drop type for library symbols dropped onto the stage. */
 export const SYMBOL_DRAG_TYPE = "application/x-zoetrope-symbol";
+
+// ---------- Phase 6: text & audio ----------
+
+export type TextAlign = "left" | "center" | "right";
+
+export interface FontAsset {
+  id: number;
+  name: string;
+  family: string;
+}
+
+export interface AudioAsset {
+  id: number;
+  name: string;
+  duration: number;
+  mime: string;
+}
+
+export type SoundSync = "event" | "stream";
+
+export interface SoundRef {
+  asset: number;
+  sync: SoundSync;
+  volume?: number;
+  loops?: number;
+}
+
+/** A sound the platform should be playing (stream) or start now (event). */
+export interface SoundCue {
+  key: string;
+  asset: number;
+  sync: SoundSync;
+  position: number;
+  volume: number;
+  loops: number;
+}
+
+export interface TextStyle {
+  /** null = the bundled default font. */
+  font: number | null;
+  size: number;
+  color: string;
+  align: TextAlign;
+  letterSpacing: number;
+  lineHeight: number;
+}

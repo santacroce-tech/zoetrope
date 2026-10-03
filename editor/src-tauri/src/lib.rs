@@ -73,12 +73,17 @@ struct PickedFile {
     name: String,
 }
 
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif"];
-
-/// Shows a multi-select image dialog. Returns the picked files (possibly empty).
+/// Shows a multi-select dialog for `kind` ("image" | "font" | "audio").
+/// Returns the picked files (possibly empty).
 #[tauri::command]
-async fn pick_images(app: AppHandle, picked: State<'_, PickedFiles>) -> Result<Vec<PickedFile>, String> {
-    let files = app.dialog().file().add_filter("Images", IMAGE_EXTENSIONS).blocking_pick_files().unwrap_or_default();
+async fn pick_files(app: AppHandle, kind: String, picked: State<'_, PickedFiles>) -> Result<Vec<PickedFile>, String> {
+    let (label, extensions): (&str, &[&str]) = match kind.as_str() {
+        "image" => ("Images", &["png", "jpg", "jpeg", "gif"]),
+        "font" => ("Fonts", &["ttf", "otf"]),
+        "audio" => ("Audio", &["mp3", "wav", "m4a", "aac", "ogg", "flac"]),
+        _ => return Err(format!("unknown file kind {kind:?}")),
+    };
+    let files = app.dialog().file().add_filter(label, extensions).blocking_pick_files().unwrap_or_default();
     let mut out = Vec::new();
     let mut allowed = picked.0.lock().map_err(|e| e.to_string())?;
     for fp in files {
@@ -90,7 +95,7 @@ async fn pick_images(app: AppHandle, picked: State<'_, PickedFiles>) -> Result<V
     Ok(out)
 }
 
-/// Returns the raw bytes of a file previously returned by `pick_images`
+/// Returns the raw bytes of a file previously returned by `pick_files`
 /// (as an ArrayBuffer, without JSON/base64 overhead).
 #[tauri::command]
 async fn read_picked_file(path: String, picked: State<'_, PickedFiles>) -> Result<tauri::ipc::Response, String> {
@@ -107,7 +112,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(PickedFiles::default())
-        .invoke_handler(tauri::generate_handler![save_project, open_project, pick_images, read_picked_file])
+        .invoke_handler(tauri::generate_handler![save_project, open_project, pick_files, read_picked_file])
         .run(tauri::generate_context!())
         .expect("error while running Zoetrope");
 }

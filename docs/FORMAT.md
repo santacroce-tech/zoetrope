@@ -1,4 +1,4 @@
-# Project file format (`.zoe`) — schema version 3
+# Project file format (`.zoe`) — schema version 4
 
 UTF-8 JSON. Field names are camelCase. Unknown fields are ignored on read.
 Fields marked *optional* may be omitted and take the listed default; the
@@ -19,6 +19,10 @@ History:
   The `v2_to_v3` migration wraps each layer's elements into a single
   one-frame keyframe, so v2 scenes are unchanged (their only frame). Elements
   gain an optional `track`.
+* **v4** (Phase 6). Adds text elements, font and audio assets, and keyframe
+  sounds. These are all additions, so `v3_to_v4` changes nothing but the
+  version. The bump exists so that a v3 reader rejects v4 files with a clear
+  "newer version" error rather than an "unknown variant" error.
 
 ## Envelope
 
@@ -89,6 +93,14 @@ that layer. A symbol's length is its longest layer (≥ 1).
 | `duration` | frames spanned, ≥ 1 |
 | `elements` | Element[], **back-to-front**. *Optional*, default `[]` (a blank keyframe). |
 | `tween` | *optional* Tween: interpolate toward the **next** keyframe over this span |
+| `sound` | *optional* SoundRef: a sound attached to this keyframe (see "Sound timing") |
+
+| SoundRef field | Notes |
+|----------------|-------|
+| `asset` | id of an **audio** asset |
+| `sync` | *optional*: `"event"` (default) or `"stream"` |
+| `volume` | *optional* 0..1, default 1 |
+| `loops` | *optional* extra repeats, default 0 |
 
 | Tween field | Notes |
 |-------------|-------|
@@ -112,6 +124,22 @@ itself is shown. Unpaired elements are shown unchanged. Rotation goes
   the shape switches at *e* = 0.5.
 - **Paints:** interpolated per stop when the stop counts match; a solid
   tweens against a gradient as a uniform gradient.
+
+### Sound timing
+
+The core decides what should be heard and when. The platform (WebAudio in
+the editor and player) only plays it.
+
+* **Stream**: the sound is locked to the timeline of the keyframe's span. At
+  frame *f* of a span starting at *s*, the clip should be at
+  (*f* − *s*) / fps seconds. It plays only while the span is showing. Seeking,
+  starting mid-span and looping all re-position it. The player restarts a
+  stream whose audio drifts more than 0.12 s from that position.
+* **Event**: the sound starts from the beginning when its keyframe is
+  entered, including when playback starts on that keyframe. It then plays to
+  the end (repeated `loops` extra times) whatever the timeline does next.
+* Sounds inside movie clips follow that clip's own clock. Sounds on hidden
+  and guide layers are silent.
 
 ### Symbol timing (nested timelines)
 
@@ -147,7 +175,7 @@ by a test).
 | `opacity` | number 0..1 | *optional*, default `1` (multiplies alpha) |
 | `blend` | BlendMode | *optional*, default `normal` |
 | `tint` | `{ "color": Color, "amount": 0..1 }` | *optional*, default none |
-| `type` | `"shape"` \| `"instance"` \| `"bitmap"` | discriminator, see below |
+| `type` | `"shape"` \| `"instance"` \| `"bitmap"` \| `"text"` | discriminator, see below |
 
 * `"type": "shape"`: `geometry`, optional `fill` (Paint), optional `stroke`
   (Stroke), optional `fillRule` (`"nonZero"` default \| `"evenOdd"`).
@@ -156,6 +184,31 @@ by a test).
   `"singleFrame"`). Instance references must be acyclic. The element `name`
   is the instance name (button events report it; scripts will address it).
 * `"type": "bitmap"`: `asset` (id of an image asset), drawn at the image's pixel size, centered on the content origin.
+* `"type": "text"`: static text, laid out by the core from an embedded font
+  (see below).
+
+| Text field | Notes |
+|------------|-------|
+| `text` | string; `\n` starts a new line |
+| `font` | id of a **font** asset |
+| `size` | em size in content units, > 0 |
+| `fill` | Paint. Gradients are in content coordinates; the box is `(0,0)–(width,height)`. |
+| `align` | *optional*: `"left"` (default), `"center"` or `"right"` |
+| `letterSpacing` | *optional*: extra advance after each glyph, default 0 |
+| `lineHeight` | *optional*: baseline-to-baseline distance as a multiple of `size`, default 1.25 |
+| `width` | *optional*: wrap width. When absent, lines break only at `\n` and the box is as wide as the longest line. |
+
+**Text layout** (`crates/zoetrope-core/src/text.rs`):
+* Each paragraph is shaped with rustybuzz (a HarfBuzz port), which gives
+  kerning, ligatures and complex scripts.
+* Lines wrap greedily at whitespace. A word wider than the box overflows it.
+* The first baseline sits at the font's ascender. The box height is ascender
+  − descender + (lines − 1) × lineHeight × size, and an empty text still
+  has a box one line high.
+* Glyph outlines become paths that are filled with the non-zero rule.
+  Renderers never see fonts, so text looks identical everywhere and needs
+  no installed fonts.
+* The whole box is clickable.
 
 **BlendMode**: `normal`, `layer`, `multiply`, `screen`, `overlay`, `darken`,
 `lighten`, `hardLight`, `difference`, `add`. Any non-`normal` mode renders the
@@ -236,10 +289,25 @@ shape's content coordinates, so it moves, rotates and scales with the shape.
 | Field | Type | Notes |
 |-------|------|-------|
 | `id`, `name` | | |
-| `type` | `"image"` | |
-| `mime` | string | `image/png`, `image/jpeg` or `image/gif` |
-| `width`, `height` | u32 | Pixel size, read from the file header by the core on import |
+| `type` | `"image"` \| `"font"` \| `"audio"` | |
 | `data` | string | Standard base64 (RFC 4648, padded) of the original file bytes |
+
+Each type has its own fields:
+
+* **image**: `mime` (`image/png`, `image/jpeg` or `image/gif`) and `width`,
+  `height` (u32 pixel size, read from the file header by the core on import).
+* **font**: `family` (read from the font's name table on import). The data is
+  a TrueType/OpenType file (`.ttf`/`.otf`, first face of a collection) and
+  must parse on load. Fonts are embedded on import; new text with no font
+  chosen embeds the bundled **Zoetrope Sans** once (a Latin subset of Lato
+  2.015, SIL OFL 1.1, renamed per the Reserved Font Name clause, see
+  `crates/zoetrope-core/assets/fonts/`).
+* **audio**: `mime` (sniffed by the core: `audio/wav`, `audio/mpeg`,
+  `audio/ogg`, `audio/mp4`, `audio/flac`) and `duration` (seconds, > 0). The
+  duration comes from the platform's decoder at import time, which also
+  proves the file is playable. The core does not decode audio.
+
+An asset cannot be removed while a bitmap, text or keyframe sound uses it.
 
 ## Validation on load
 
@@ -247,7 +315,8 @@ The root symbol exists; stage values are in range; ids are unique and
 `< nextId`; folders hold no elements and only folders hold child layers;
 element values are in range (opacity, tint amount, finite transforms,
 non-negative sizes and stroke widths, valid paints/dashes, non-empty finite
-paths); every instance and bitmap reference resolves; no symbol contains
+paths, text sizes/spacing); every instance, bitmap, text-font and sound
+reference resolves to an asset of the right type, and fonts parse; no symbol contains
 itself, directly or transitively.
 
 Floats round-trip exactly (`serde_json` with `float_roundtrip`), so save →

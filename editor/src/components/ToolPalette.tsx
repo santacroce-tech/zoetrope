@@ -1,4 +1,4 @@
-import { cssPaint, type PaintStyle, type ShapeStyle } from "../engine";
+import { cssPaint, type FontAsset, type PaintStyle, type ShapeStyle, type TextAlign, type TextStyle } from "../engine";
 import { ColorField, NumberField } from "./fields";
 import type { Tool, ToolOptions } from "./StageView";
 
@@ -18,6 +18,7 @@ const TOOLS: { id: Tool; key: string; label: string; glyph: string }[] = [
   { id: "ellipse", key: "O", label: "Ellipse", glyph: "◯" },
   { id: "polygon", key: "U", label: "Polygon / star (drag from center)", glyph: "⬠" },
   { id: "line", key: "N", label: "Line", glyph: "╱" },
+  { id: "text", key: "T", label: "Text (click: auto width, drag: wrapping box; click a text to edit it)", glyph: "T" },
   { id: "gradient", key: "F", label: "Gradient transform", glyph: "◐" },
   { id: "eyedropper", key: "I", label: "Eyedropper (picks fill or stroke)", glyph: "💧" },
   { id: "bucket", key: "K", label: "Paint bucket (⇧: apply stroke color)", glyph: "🪣" },
@@ -117,8 +118,27 @@ export function ToolPalette({ tool, onTool, style, onStyle }: Props) {
   );
 }
 
+/** Text tool settings shown in the options bar. */
+export interface TextOptions {
+  style: TextStyle;
+  onStyle: (s: TextStyle) => void;
+  fonts: FontAsset[];
+  onImportFont: () => void;
+}
+
 /** Contextual options for the current tool (shown in the top toolbar). */
-export function ToolOptionsBar({ tool, options, onOptions }: { tool: Tool; options: ToolOptions; onOptions: (o: ToolOptions) => void }) {
+export function ToolOptionsBar({ tool, options, onOptions, text }: { tool: Tool; options: ToolOptions; onOptions: (o: ToolOptions) => void; text: TextOptions }) {
+  if (tool === "text") {
+    const { style, onStyle } = text;
+    return (
+      <div className="group tool-options">
+        <FontSelect fonts={text.fonts} value={style.font} onChange={(font) => onStyle({ ...style, font })} onImport={text.onImportFont} />
+        <NumberField label="Size" precision={1} min={1} max={1000} value={style.size} onCommit={(size) => onStyle({ ...style, size })} />
+        <ColorField value={style.color} onCommit={(color) => onStyle({ ...style, color })} />
+        <AlignButtons value={style.align} onChange={(align) => onStyle({ ...style, align })} />
+      </div>
+    );
+  }
   if (tool === "polygon") {
     return (
       <div className="group tool-options">
@@ -153,4 +173,44 @@ export function ToolOptionsBar({ tool, options, onOptions }: { tool: Tool; optio
     );
   }
   return null;
+}
+
+/** Font picker; `null` = the bundled default font. */
+export function FontSelect(props: { fonts: FontAsset[]; value: number | null; onChange: (f: number | null) => void; onImport: () => void }) {
+  return (
+    <select
+      value={props.value ?? props.fonts.find((f) => f.family === "Zoetrope Sans")?.id ?? ""}
+      title="Font (embedded in the project)"
+      onChange={(e) => {
+        if (e.target.value === "import") return props.onImport();
+        props.onChange(e.target.value === "" ? null : Number(e.target.value));
+      }}
+    >
+      {!props.fonts.some((f) => f.family === "Zoetrope Sans") && <option value="">Zoetrope Sans (default)</option>}
+      {props.fonts.map((f) => (
+        <option key={f.id} value={f.id}>
+          {f.family}
+        </option>
+      ))}
+      <option value="import">Import font…</option>
+    </select>
+  );
+}
+
+export function AlignButtons({ value, onChange }: { value: TextAlign; onChange: (a: TextAlign) => void }) {
+  return (
+    <span className="seg">
+      {(
+        [
+          ["left", "Align left", "⇤"],
+          ["center", "Center", "≡"],
+          ["right", "Align right", "⇥"],
+        ] as const
+      ).map(([a, label, glyph]) => (
+        <button key={a} className={`mini ${value === a ? "on" : ""}`} title={label} onClick={() => onChange(a)}>
+          {glyph}
+        </button>
+      ))}
+    </span>
+  );
 }

@@ -130,6 +130,11 @@ impl Edit {
                 }
                 let probe = Layer { keyframes: keyframes.clone(), ..Layer::new(layer, "", old.kind) };
                 check_keyframes(&probe)?;
+                for k in &keyframes {
+                    if let Some(s) = &k.sound {
+                        p.check_sound(s)?;
+                    }
+                }
                 let mut seen = std::collections::HashSet::new();
                 let kept: std::collections::HashSet<ElementId> = old.all_elements().map(|e| e.id).collect();
                 for e in probe.all_elements() {
@@ -187,7 +192,12 @@ impl Edit {
                 let mut used = false;
                 for s in &p.symbols {
                     walk_layers(&s.layers, &mut |l| {
-                        used |= l.all_elements().any(|e| e.kind == ElementKind::Bitmap { asset });
+                        used |= l.all_elements().any(|e| match &e.kind {
+                            ElementKind::Bitmap { asset: a } => *a == asset,
+                            ElementKind::Text(t) => t.font == asset,
+                            _ => false,
+                        });
+                        used |= l.keyframes.iter().any(|k| k.sound.as_ref().is_some_and(|s| s.asset == asset));
                     });
                 }
                 if used {

@@ -22,6 +22,7 @@ import type {
   ShapeTool,
   SnapConfig,
   StageInfo,
+  TextStyle,
 } from "../engine";
 import {
   dist,
@@ -37,7 +38,7 @@ import {
   type View,
 } from "../view";
 
-export type Tool = "select" | "subselect" | "pen" | "pencil" | ShapeTool | "gradient" | "eyedropper" | "bucket" | "hand";
+export type Tool = "select" | "subselect" | "pen" | "pencil" | ShapeTool | "text" | "gradient" | "eyedropper" | "bucket" | "hand";
 
 export interface ToolOptions extends ShapeOptions {
   /** Pencil: smooth curves (true) or straight segments ("ink", false). */
@@ -76,6 +77,8 @@ interface Props {
   tool: Tool;
   activeLayer: number | null;
   shapeStyle: ShapeStyle;
+  /** Style for new text (text tool). */
+  textStyle: TextStyle;
   toolOptions: ToolOptions;
   onPicked: (p: PickedStyle) => void;
   settings: StageSettings;
@@ -106,6 +109,7 @@ type Interaction =
   | { kind: "shape"; tool: ShapeTool; p0: Pt; p1: Pt; guides: Guides; preview: Polyline[] | null }
   | { kind: "pen"; closing: boolean }
   | { kind: "pencil"; points: Pt[] }
+  | { kind: "textBox"; p0: Pt; p1: Pt }
   | { kind: "pan"; screen: Pt; view: View };
 
 const HANDLES: Handle[] = ["nw", "ne", "se", "sw", "n", "e", "s", "w"];
@@ -154,6 +158,8 @@ export function StageView(props: Props) {
   const spaceDown = useRef(false);
   const frame = useRef(0);
   const [cursor, setCursor] = useState("default");
+  /** Text being typed into (the core previews it live; committed on blur/Esc). */
+  const [textEdit, setTextEdit] = useState<{ id: number; value: string } | null>(null);
 
   const view: View = props.view ?? fitView(size.w || 1, size.h || 1, stage.width, stage.height);
   // Event handlers read the latest props/view through refs.
@@ -189,6 +195,14 @@ export function StageView(props: Props) {
 
   const closeTolerance = () => 8 / live.current.view.zoom;
 
+  /** Stage-space corners of the text box being typed into. */
+  const textBoxCorners = (): Pt[] | null => {
+    const id = engine.textEditId();
+    if (id === undefined) return null;
+    const g: SelectionGeometry | null = JSON.parse(engine.selectionJson(JSON.stringify([id])));
+    return g?.corners ?? null;
+  };
+
   // ------------------------------------------------------------ drawing
 
   const draw = useCallback(() => {
@@ -213,7 +227,7 @@ export function StageView(props: Props) {
     o.setTransform(dpr, 0, 0, dpr, 0, 0);
     o.clearRect(0, 0, w, h);
     if (p.runtime) {
-      drawOverlay(o, p, v, { selection: null, path: null, gradient: null, pen: null, anchors: [] }, { kind: "idle" });
+      drawOverlay(o, p, v, { selection: null, path: null, gradient: null, pen: null, anchors: [], textBox: null }, { kind: "idle" });
       return;
     }
     const chrome: Chrome = {
@@ -222,6 +236,7 @@ export function StageView(props: Props) {
       gradient: p.tool === "gradient" ? gradientControls() : null,
       pen: p.tool === "pen" ? JSON.parse(p.engine.penPreviewJson(8 / v.zoom)) : null,
       anchors: p.anchors,
+      textBox: textBoxCorners(),
     };
     drawOverlay(o, p, v, chrome, interaction.current);
 
@@ -242,7 +257,7 @@ export function StageView(props: Props) {
         cursor: "#e86a92",
       });
     }
-  }, [selectionGeometry, pathInfo, gradientControls]);
+  }, [selectionGeometry, pathInfo, gradientControls]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const requestDraw = useCallback(() => {
     if (!frame.current) frame.current = requestAnimationFrame(draw);
@@ -275,6 +290,44 @@ export function StageView(props: Props) {
       alive = false;
     };
   }, [engine, version, requestDraw]);
+
+  // ------------------------------------------------------------ text editing
+
+  const commitText = useCallback(() => {
+    if (engine.textEditId() === undefined) return setTextEdit(null);
+    try {
+      const id = engine.endTextEdit();
+      live.current.props.onSelect(id === undefined ? [] : [id]);
+    } catch (err) {
+      fail(err);
+    }
+    setTextEdit(null);
+    live.current.props.onChanged();
+  }, [engine]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startTextEdit = (id: number) => {
+    try {
+      const value = engine.beginTextEdit(id);
+      setTextEdit({ id, value });
+      live.current.props.onSelect([]);
+      requestDraw();
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  // Typing ends when the engine ends it (undo, load, playback…) or the tool changes.
+  useEffect(() => {
+    if (textEdit && engine.textEditId() !== textEdit.id) setTextEdit(null);
+  }, [engine, version, textEdit]);
+  useEffect(() => {
+    if (props.tool !== "text" && props.tool !== "select") commitText();
+  }, [props.tool, commitText]);
+  useEffect(() => {
+    if (props.runtime) commitText();
+  }, [props.runtime, commitText]);
+
+  const isText = (id: number | undefined) => id !== undefined && JSON.parse(engine.elementJson(id))?.element.type === "text";
 
   // ------------------------------------------------------------ pen lifecycle
 
@@ -411,6 +464,7 @@ export function StageView(props: Props) {
     const pt = toStage(v, s);
     const m = mods(e);
     if (p.runtime) return runtimePointer(e, true);
+    if (engine.textEditId() !== undefined) commitText();
 
     if (p.tool === "hand" || spaceDown.current || e.button === 1) {
       interaction.current = { kind: "pan", screen: s, view: v };
@@ -439,6 +493,13 @@ export function StageView(props: Props) {
         if (p.activeLayer === null) return fail("Select a layer to draw on");
         interaction.current = { kind: "pencil", points: [pt] };
         return;
+      case "text": {
+        const hit = engine.hitTest(pt.x, pt.y, 3 / v.zoom);
+        if (isText(hit)) return startTextEdit(hit!);
+        if (p.activeLayer === null) return fail("Select a layer to type on");
+        interaction.current = { kind: "textBox", p0: pt, p1: pt };
+        return;
+      }
       case "eyedropper": {
         const picked: PickedStyle | null = JSON.parse(engine.pickStyle(pt.x, pt.y, 3 / v.zoom));
         if (picked) p.onPicked(picked);
@@ -566,6 +627,8 @@ export function StageView(props: Props) {
         return single() !== null && gradientChromeAt(s) ? "pointer" : "default";
       case "pen":
         return PEN_CURSOR;
+      case "text":
+        return "text";
       case "eyedropper":
       case "bucket":
         return engine.hitTest(pt.x, pt.y, 3 / v.zoom) !== undefined ? "pointer" : "not-allowed";
@@ -636,6 +699,10 @@ export function StageView(props: Props) {
         engine.penDrag(pt.x, pt.y, JSON.stringify(mods(e)));
         requestDraw();
         return;
+      case "textBox":
+        it.p1 = pt;
+        requestDraw();
+        return;
       case "pencil": {
         const last = it.points[it.points.length - 1];
         if (dist(last, pt) * v.zoom >= 1) it.points.push(pt);
@@ -699,6 +766,23 @@ export function StageView(props: Props) {
         engine.penUp();
         if (it.closing) finishPen();
         break;
+      case "textBox": {
+        if (p.activeLayer === null) break;
+        // Click: auto-width text. Drag: a wrapping box as wide as the drag.
+        const dragged = Math.abs(it.p1.x - it.p0.x) * v.zoom >= DRAG_THRESHOLD;
+        const x = dragged ? Math.min(it.p0.x, it.p1.x) : it.p0.x;
+        const y = dragged ? Math.min(it.p0.y, it.p1.y) : it.p0.y;
+        try {
+          const style = { ...p.textStyle, font: p.textStyle.font ?? undefined };
+          const id = engine.createText(p.activeLayer, x, y, JSON.stringify(style), dragged ? Math.abs(it.p1.x - it.p0.x) : undefined);
+          setTextEdit({ id, value: "" });
+          p.onSelect([]);
+          p.onChanged();
+        } catch (err) {
+          fail(err);
+        }
+        break;
+      }
       case "pencil":
         if (p.activeLayer === null || it.points.length < 2) break;
         try {
@@ -727,7 +811,9 @@ export function StageView(props: Props) {
       // Double-click a symbol instance: edit it in place.
       const pt = toStage(v, screenPoint(e));
       const hit = engine.hitTest(pt.x, pt.y, 3 / v.zoom);
-      if (hit !== undefined && JSON.parse(engine.elementJson(hit))?.element.type === "instance") p.onEnterInstance(hit);
+      const type = hit === undefined ? null : JSON.parse(engine.elementJson(hit))?.element.type;
+      if (type === "instance") p.onEnterInstance(hit!);
+      if (type === "text") startTextEdit(hit!);
       return;
     }
     if (p.tool !== "subselect") return;
@@ -754,7 +840,8 @@ export function StageView(props: Props) {
 
   // Space = temporary hand; Escape cancels a drag; Enter/Escape end a pen path.
   useEffect(() => {
-    const typing = (e: KeyboardEvent) => e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
+    const typing = (e: KeyboardEvent) =>
+      e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement;
     const down = (e: KeyboardEvent) => {
       if (typing(e)) return;
       if (e.code === "Space" && !e.repeat) {
@@ -843,6 +930,20 @@ export function StageView(props: Props) {
           onPointerCancel={cancelInteraction}
           onDoubleClick={onDoubleClick}
         />
+        {textEdit && !props.runtime && (
+          <TextEditor
+            key={textEdit.id}
+            value={textEdit.value}
+            corners={textBoxCorners()}
+            view={view}
+            onInput={(value) => {
+              engine.updateText(value);
+              setTextEdit({ ...textEdit, value });
+              requestDraw();
+            }}
+            onCommit={commitText}
+          />
+        )}
       </div>
     </div>
   );
@@ -859,6 +960,8 @@ interface Chrome {
   gradient: GradientControls | null;
   pen: PenPreview | null;
   anchors: NodeRef[];
+  /** Box of the text being typed into. */
+  textBox: Pt[] | null;
 }
 
 function strokePolylines(o: CanvasRenderingContext2D, lines: Polyline[], sc: (p: Pt) => Pt) {
@@ -1026,6 +1129,22 @@ function drawOverlay(o: CanvasRenderingContext2D, p: Props, v: View, chrome: Chr
     pen.anchors.forEach((a, i) => square(o, sc(a), i === 0 && pen.canClose ? 10 : 6, i === pen.anchors.length - 1));
   }
 
+  if (chrome.textBox) {
+    o.setLineDash([3, 3]);
+    o.strokeStyle = SELECT;
+    strokePolylines(o, [{ points: chrome.textBox, closed: true }], sc);
+    o.setLineDash([]);
+  }
+
+  if (it.kind === "textBox" && Math.abs(it.p1.x - it.p0.x) * v.zoom >= DRAG_THRESHOLD) {
+    const a = sc(it.p0);
+    const b = sc(it.p1);
+    o.setLineDash([3, 3]);
+    o.strokeStyle = SELECT;
+    o.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x, b.y - a.y);
+    o.setLineDash([]);
+  }
+
   if (it.kind === "marquee") {
     const a = sc(it.start);
     const b = sc(it.current);
@@ -1069,4 +1188,41 @@ function drawOverlay(o: CanvasRenderingContext2D, p: Props, v: View, chrome: Chr
     }
     o.stroke();
   }
+}
+
+/**
+ * The text field for typing into a text element. The canvas shows the real,
+ * shaped result live; this field sits under the box for caret and IME input.
+ */
+function TextEditor(props: { value: string; corners: Pt[] | null; view: View; onInput: (v: string) => void; onCommit: () => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const t = ref.current!;
+    t.focus();
+    t.setSelectionRange(t.value.length, t.value.length);
+  }, []);
+  if (!props.corners) return null;
+  const pts = props.corners.map((c) => toScreen(props.view, c));
+  const left = Math.min(...pts.map((q) => q.x));
+  const top = Math.max(...pts.map((q) => q.y)) + 6;
+  return (
+    <textarea
+      ref={ref}
+      className="text-editor"
+      style={{ left, top }}
+      value={props.value}
+      placeholder="Type…  (Esc or ⌘↵ to finish)"
+      spellCheck={false}
+      rows={Math.max(1, props.value.split("\n").length)}
+      onChange={(e) => props.onInput(e.target.value)}
+      onBlur={props.onCommit}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
+          e.preventDefault();
+          props.onCommit();
+        }
+      }}
+    />
+  );
 }

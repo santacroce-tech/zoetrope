@@ -23,7 +23,8 @@ use crate::error::{Error, Result};
 use crate::geom::Path;
 use crate::math::{Matrix, Point};
 pub use crate::paint::{FillRule, GradientStop, LineCap, LineJoin, Paint, PaintStyle, Stroke};
-pub use crate::timeline::{EasePreset, Easing, Keyframe, Tween, TweenKind};
+pub use crate::text::{TextAlign, TextBlock};
+pub use crate::timeline::{EasePreset, Easing, Keyframe, SoundRef, SoundSync, Tween, TweenKind};
 pub use crate::vector::{HandleSide, Node, NodeKind, NodeRef, SubPath, VectorPath};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -242,6 +243,8 @@ pub enum ElementKind {
     },
     /// An embedded image, drawn at its pixel size centered on the origin.
     Bitmap { asset: AssetId },
+    /// Static text (laid out by the core from an embedded font).
+    Text(TextBlock),
 }
 
 impl ElementKind {
@@ -293,6 +296,9 @@ impl Element {
         }
         if let ElementKind::Shape(s) = &self.kind {
             s.validate().or_else(|e| bad(&e.to_string()))?;
+        }
+        if let ElementKind::Text(t) = &self.kind {
+            t.validate().or_else(|e| bad(&e.to_string()))?;
         }
         Ok(())
     }
@@ -771,13 +777,42 @@ impl Project {
                 }
             }
             ElementKind::Bitmap { asset } => {
-                if self.asset(asset).is_none() {
-                    return Err(Error::NotFound(format!("asset {}", asset.0)));
+                if !matches!(self.asset(asset).map(|a| &a.kind), Some(AssetKind::Image { .. })) {
+                    return Err(Error::NotFound(format!("image asset {}", asset.0)));
+                }
+            }
+            ElementKind::Text(ref t) => {
+                if self.font_data(t.font).is_none() {
+                    return Err(Error::NotFound(format!("font asset {}", t.font.0)));
                 }
             }
             ElementKind::Shape(_) => {}
         }
         Ok(())
+    }
+
+    /// A keyframe sound must point at an audio asset, with volume in 0..=1.
+    pub fn check_sound(&self, s: &SoundRef) -> Result<()> {
+        if !matches!(self.asset(s.asset).map(|a| &a.kind), Some(AssetKind::Audio { .. })) {
+            return Err(Error::NotFound(format!("audio asset {}", s.asset.0)));
+        }
+        if !(0.0..=1.0).contains(&s.volume) {
+            return Err(Error::Invalid("sound volume must be within 0..1".into()));
+        }
+        Ok(())
+    }
+
+    /// The bytes of a font asset.
+    pub fn font_data(&self, id: AssetId) -> Option<&[u8]> {
+        match &self.asset(id)?.kind {
+            AssetKind::Font { data, .. } => Some(&data.0),
+            _ => None,
+        }
+    }
+
+    /// Lays out a text block with its font (see `text::layout`).
+    pub fn layout_text(&self, t: &TextBlock) -> Option<crate::text::TextLayout> {
+        crate::text::layout(t, self.font_data(t.font)?)
     }
 
     /// Structural integrity check, run on every load.
@@ -799,9 +834,14 @@ impl Project {
         };
         for a in &self.assets {
             claim(a.id.0)?;
-            let AssetKind::Image { width, height, .. } = &a.kind;
-            if *width == 0 || *height == 0 {
-                return invalid(format!("asset {} has zero size", a.id.0));
+            match &a.kind {
+                AssetKind::Image { width, height, .. } if *width == 0 || *height == 0 => {
+                    return invalid(format!("asset {} has zero size", a.id.0))
+                }
+                AssetKind::Audio { duration, .. } if !(duration.is_finite() && *duration > 0.0) => {
+                    return invalid(format!("audio asset {} has no duration", a.id.0))
+                }
+                _ => {}
             }
         }
         for s in &self.symbols {
@@ -820,6 +860,9 @@ impl Project {
                         return invalid(format!("layer {} has child layers but is not a folder", l.id.0));
                     }
                     check_keyframes(l)?;
+                    for s in l.keyframes.iter().filter_map(|k| k.sound.as_ref()) {
+                        self.check_sound(s)?;
+                    }
                     for e in l.all_elements() {
                         claim(e.id.0)?;
                         e.validate()?;
@@ -827,8 +870,11 @@ impl Project {
                             ElementKind::Instance { symbol, .. } if self.symbol(symbol).is_none() => {
                                 return invalid(format!("element {} instances missing symbol {}", e.id.0, symbol.0))
                             }
-                            ElementKind::Bitmap { asset } if self.asset(asset).is_none() => {
-                                return invalid(format!("element {} references missing asset {}", e.id.0, asset.0))
+                            ElementKind::Bitmap { asset } if !matches!(self.asset(asset).map(|a| &a.kind), Some(AssetKind::Image { .. })) => {
+                                return invalid(format!("element {} references missing image {}", e.id.0, asset.0))
+                            }
+                            ElementKind::Text(ref t) if self.font_data(t.font).is_none() => {
+                                return invalid(format!("text {} references missing font {}", e.id.0, t.font.0))
                             }
                             _ => {}
                         }

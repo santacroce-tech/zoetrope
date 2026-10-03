@@ -79,10 +79,13 @@ pub fn content_bounds(p: &Project, kind: &ElementKind, m: &Matrix, child_frame: 
             Some(b.inflate(half))
         }
         ElementKind::Bitmap { asset } => {
-            let a = p.asset(*asset)?;
-            let AssetKind::Image { width, height, .. } = a.kind;
+            let AssetKind::Image { width, height, .. } = p.asset(*asset)?.kind else { return None };
             let (w, h) = (width as f64, height as f64);
             Some(Rect::new(-w / 2.0, -h / 2.0, w / 2.0, h / 2.0).transformed(m))
+        }
+        ElementKind::Text(t) => {
+            let l = p.layout_text(t)?;
+            Some(Rect::new(0.0, 0.0, l.width.max(1.0), l.height).transformed(m))
         }
         ElementKind::Instance { symbol, .. } => {
             if depth > MAX_NESTING_DEPTH {
@@ -148,9 +151,16 @@ pub fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, ch
         }
         ElementKind::Bitmap { asset } => {
             let (Some(a), Some(inv)) = (p.asset(*asset), m.invert()) else { return false };
-            let AssetKind::Image { width, height, .. } = a.kind;
+            let AssetKind::Image { width, height, .. } = a.kind else { return false };
             let q = inv.apply(pt);
             q.x.abs() <= width as f64 / 2.0 && q.y.abs() <= height as f64 / 2.0
+        }
+        ElementKind::Text(t) => {
+            // The whole text box is clickable (not just the ink).
+            let (Some(l), Some(inv)) = (p.layout_text(t), m.invert()) else { return false };
+            let q = inv.apply(pt);
+            let pad = tol / scale_factor(m);
+            q.x >= -pad && q.x <= l.width.max(1.0) + pad && q.y >= -pad && q.y <= l.height + pad
         }
         ElementKind::Instance { symbol, .. } => {
             if depth > MAX_NESTING_DEPTH {
@@ -198,7 +208,7 @@ fn pick_in(p: &Project, symbol: SymbolId, frame: u32, m: &Matrix, pt: Point, tol
                     return Some(hit);
                 }
             }
-            ElementKind::Bitmap { .. } => {}
+            ElementKind::Bitmap { .. } | ElementKind::Text(_) => {}
         }
     }
     None

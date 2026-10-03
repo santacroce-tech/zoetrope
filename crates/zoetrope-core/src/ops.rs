@@ -95,8 +95,13 @@ pub fn duplicate_element(doc: &mut Document, id: ElementId, dx: f64, dy: f64) ->
 }
 
 /// Keys of an element's JSON form that `patch_element` may change.
-const PATCHABLE: &[&str] =
-    &["name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke", "fillRule", "firstFrame", "loopMode"];
+const PATCHABLE: &[&str] = &[
+    "name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke", "fillRule", "firstFrame", "loopMode", "text", "font",
+    "size", "align", "letterSpacing", "lineHeight", "width",
+];
+
+/// Keys that only apply to text elements.
+const TEXT_KEYS: &[&str] = &["text", "font", "size", "align", "letterSpacing", "lineHeight", "width"];
 
 /// Merges a JSON patch into an element (`transform`, and `stroke` when the
 /// shape already has one, merge field by field; other keys replace; `null`
@@ -123,6 +128,13 @@ pub fn patch_elements(doc: &mut Document, ids: &[ElementId], patch: &Value) -> R
                 for (tk, tv) in pt {
                     t.insert(tk.clone(), tv.clone());
                 }
+            } else if TEXT_KEYS.contains(&k.as_str()) {
+                if !matches!(e.kind, ElementKind::Text(_)) {
+                    return Err(Error::Invalid(format!("{k:?} only applies to text")));
+                }
+                v[k] = pv.clone();
+            } else if k == "fill" && matches!(e.kind, ElementKind::Text(_)) {
+                v[k] = pv.clone();
             } else if k == "firstFrame" || k == "loopMode" {
                 if !matches!(e.kind, ElementKind::Instance { .. }) {
                     return Err(Error::Invalid(format!("{k:?} only applies to symbol instances")));
@@ -415,6 +427,18 @@ pub fn set_paint_style(doc: &mut Document, ids: &[ElementId], part: PaintPart, s
     let mut edits = Vec::new();
     for id in ids {
         let mut e = doc.project.require_element(*id)?.clone();
+        if let ElementKind::Text(t) = &mut e.kind {
+            // Text has a fill only; gradients fit its box.
+            let (PaintPart::Fill, Some(style)) = (part, style) else {
+                return Err(Error::Invalid("text has a fill but no stroke, and the fill can't be removed".into()));
+            };
+            let l = doc.project.layout_text(t).ok_or_else(|| Error::Invalid("text font is missing".into()))?;
+            t.fill = style.fit(Rect::new(0.0, 0.0, l.width.max(1.0), l.height));
+            if *doc.project.element(*id).unwrap() != e {
+                edits.push(Edit::ReplaceElement { element: e });
+            }
+            continue;
+        }
         let s = shape_mut(&mut e)?;
         let bounds = s.geometry.to_path().bounds(&Matrix::IDENTITY).unwrap_or(Rect::new(0.0, 0.0, 1.0, 1.0));
         let paint = style.map(|st| st.fit(bounds));
@@ -860,13 +884,13 @@ pub fn insert_keyframe(doc: &mut Document, layers: &[LayerId], frame: u32, blank
                 let end = start + kfs[i].duration;
                 kfs[i].duration = frame - start;
                 let tween = kfs[i].tween.clone();
-                kfs.insert(i + 1, Keyframe { duration: end - frame, elements, tween });
+                kfs.insert(i + 1, Keyframe { tween, ..Keyframe::with(end - frame, elements) });
             }
             None => {
                 let len = l.length();
                 let elements = copies(p, len.saturating_sub(1));
                 kfs.last_mut().expect("content layers have keyframes").duration += frame - len;
-                kfs.push(Keyframe { duration: 1, elements, tween: None });
+                kfs.push(Keyframe::with(1, elements));
             }
         }
         Ok(Some(kfs))
@@ -980,7 +1004,7 @@ pub fn convert_to_symbol(
     // Buttons get all four states (Up, Over, Down, Hit) showing the same art.
     let duration = if kind == SymbolKind::Button { 4 } else { 1 };
     let mut layer = Layer::new(layer_id, "Layer 1", LayerKind::Normal);
-    layer.keyframes = vec![Keyframe { duration, elements: Vec::new(), tween: None }];
+    layer.keyframes = vec![Keyframe::blank(duration)];
     let symbol = Symbol { id: symbol_id, name: name.trim().to_string(), kind, layers: vec![layer] };
 
     let mut instance = Element::new(ElementId(doc.project.alloc_id()), ElementKind::instance(symbol_id));
@@ -1072,4 +1096,119 @@ pub fn place_instance(doc: &mut Document, layer: LayerId, symbol: SymbolId, at: 
     let edits = place_on_top(&doc.project, layer, frame, vec![e])?;
     doc.execute("Place Instance", edits)?;
     Ok(id)
+}
+
+// ---------------------------------------------------------------- text & audio
+
+/// The project's copy of the bundled default font, and the edit that adds
+/// it if the project doesn't have it yet (so text always embeds its font).
+fn default_font(doc: &mut Document) -> (AssetId, Option<Edit>) {
+    let existing = doc.project.assets.iter().find(|a| {
+        matches!(&a.kind, AssetKind::Font { family, data } if family == crate::text::DEFAULT_FONT_NAME && data.0.len() == crate::text::DEFAULT_FONT.len())
+    });
+    if let Some(a) = existing {
+        return (a.id, None);
+    }
+    let id = AssetId(doc.project.alloc_id());
+    let asset = Asset {
+        id,
+        name: format!("{}.ttf", crate::text::DEFAULT_FONT_NAME),
+        kind: AssetKind::Font { family: crate::text::DEFAULT_FONT_NAME.into(), data: Bytes(crate::text::DEFAULT_FONT.into()) },
+    };
+    (id, Some(Edit::InsertAsset { index: doc.project.assets.len(), asset }))
+}
+
+/// Style for new text (from the text tool).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextStyle {
+    /// A font asset; `None` uses (and embeds) the bundled default font.
+    pub font: Option<AssetId>,
+    pub size: f64,
+    pub color: Color,
+    pub align: crate::text::TextAlign,
+    pub letter_spacing: f64,
+    pub line_height: f64,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        TextStyle { font: None, size: 32.0, color: Color::BLACK, align: Default::default(), letter_spacing: 0.0, line_height: 1.25 }
+    }
+}
+
+/// Creates a text element whose box's top-left is at `at` (symbol space).
+pub fn create_text(doc: &mut Document, layer: LayerId, at: Point, text: &str, style: &TextStyle, width: Option<f64>, frame: u32) -> Result<ElementId> {
+    check_target_layer(&doc.project, layer)?;
+    let mut edits = Vec::new();
+    let font = match style.font {
+        Some(f) => {
+            if doc.project.font_data(f).is_none() {
+                return Err(Error::NotFound(format!("font asset {}", f.0)));
+            }
+            f
+        }
+        None => {
+            let (id, add) = default_font(doc);
+            edits.extend(add);
+            id
+        }
+    };
+    let block = crate::text::TextBlock {
+        text: text.to_string(),
+        font,
+        size: style.size,
+        fill: Paint::solid(style.color),
+        align: style.align,
+        letter_spacing: style.letter_spacing,
+        line_height: style.line_height,
+        width,
+    };
+    let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Text(block));
+    el.transform = Transform::at(at.x, at.y);
+    let id = el.id;
+    // The font asset (if new) must exist before the element is placed.
+    let mut scratch = doc.project.clone();
+    for e in &edits {
+        e.clone().apply(&mut scratch)?;
+    }
+    edits.extend(place_on_top(&scratch, layer, frame, vec![el])?);
+    doc.execute("Text", edits)?;
+    Ok(id)
+}
+
+/// Embeds a TrueType/OpenType font. Returns the asset.
+pub fn import_font(doc: &mut Document, name: &str, data: &[u8]) -> Result<AssetId> {
+    let family = crate::text::font_family(data).ok_or_else(|| Error::Invalid("not a TrueType/OpenType font".into()))?;
+    let id = AssetId(doc.project.alloc_id());
+    let asset = Asset { id, name: name.to_string(), kind: AssetKind::Font { family, data: Bytes(data.into()) } };
+    doc.execute("Import Font", vec![Edit::InsertAsset { index: doc.project.assets.len(), asset }])?;
+    Ok(id)
+}
+
+/// Embeds an audio clip. `duration` (seconds) comes from the platform's
+/// decoder, which also proved the file playable.
+pub fn import_audio(doc: &mut Document, name: &str, data: &[u8], duration: f64) -> Result<AssetId> {
+    let mime = crate::asset::sniff_audio(data).ok_or_else(|| Error::Invalid("unsupported audio file (use MP3, WAV, M4A/AAC, Ogg or FLAC)".into()))?;
+    if !(duration.is_finite() && duration > 0.0) {
+        return Err(Error::Invalid("audio duration must be positive".into()));
+    }
+    let id = AssetId(doc.project.alloc_id());
+    let asset = Asset { id, name: name.to_string(), kind: AssetKind::Audio { mime: mime.into(), duration, data: Bytes(data.into()) } };
+    doc.execute("Import Audio", vec![Edit::InsertAsset { index: doc.project.assets.len(), asset }])?;
+    Ok(id)
+}
+
+/// Attaches (or with `None`, removes) a sound on the keyframe spanning `frame`.
+pub fn set_sound(doc: &mut Document, layers: &[LayerId], frame: u32, sound: Option<SoundRef>) -> Result<()> {
+    if let Some(s) = &sound {
+        doc.project.check_sound(s)?;
+    }
+    let label = if sound.is_some() { "Sound" } else { "Remove Sound" };
+    edit_timeline(doc, layers, label, |_, l| {
+        let Some((i, _)) = l.keyframe_at(frame) else { return Err(Error::Invalid("no frame there: insert one first (F5)".into())) };
+        let mut kfs = l.keyframes.clone();
+        kfs[i].sound = sound.clone();
+        Ok(Some(kfs))
+    })
 }
