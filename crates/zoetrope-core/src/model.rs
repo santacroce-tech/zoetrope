@@ -58,6 +58,60 @@ pub struct Project {
     pub symbols: Vec<Symbol>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assets: Vec<Asset>,
+    /// Export ("publish") settings; `None` = defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<Publish>,
+}
+
+/// How the exported player fits the stage into its window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScaleMode {
+    /// The whole stage, as large as fits; bars fill the rest (Flash "show all").
+    #[default]
+    Letterbox,
+    /// Covers the window, keeping proportions; the overflow is cropped (Flash "no border").
+    Fill,
+    /// Stage pixels 1:1, centered.
+    Fixed,
+}
+
+/// Single self-contained HTML, or HTML + player script + asset pack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportMode {
+    #[default]
+    SingleFile,
+    Folder,
+}
+
+fn default_page_color() -> Color {
+    Color::rgb(0x11, 0x11, 0x11)
+}
+
+/// Export settings, saved with the project.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Publish {
+    /// Page title; empty = the file name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default)]
+    pub scale: ScaleMode,
+    #[serde(default)]
+    pub mode: ExportMode,
+    /// Page color around the stage (letterbox bars, fixed mode margins).
+    #[serde(default = "default_page_color")]
+    pub page_color: Color,
+    /// Wait for a click before playing (so sound can start with the movie).
+    #[serde(default)]
+    pub start_on_click: bool,
+}
+
+impl Default for Publish {
+    fn default() -> Self {
+        Publish { title: String::new(), scale: ScaleMode::default(), mode: ExportMode::default(), page_color: default_page_color(), start_on_click: false }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -20,10 +20,11 @@ import {
 import { LibraryPanel } from "./components/LibraryPanel";
 import { OutputPanel } from "./components/OutputPanel";
 import { Runtime } from "./runtime/runtime";
+import { exposeTestHook, TEST_SEED } from "./runtime/testhook";
 import type { OutputLine } from "./runtime/scripting";
 import { describeImport, importFonts } from "./assets";
-import { fileToBinary, importImages, isTauri, openProject, saveHtml, saveProject, type PickedBinary } from "./platform";
-import { buildHtml } from "./export";
+import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
+import { ExportDialog } from "./components/ExportDialog";
 import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
 import { Timeline, type FrameOp, type OnionSettings } from "./components/Timeline";
 import { PropertiesPanel } from "./components/PropertiesPanel";
@@ -147,8 +148,12 @@ function Editor({ engine }: { engine: Engine }) {
       goTo(start);
       let session: Runtime | null = null;
       let cancelled = false;
+      // Dev builds: tests set window.zoetropeTestMode to step the preview by hand.
+      const testMode = import.meta.env.DEV && window.zoetropeTestMode === true;
       Runtime.start(engine, {
         loop,
+        manual: testMode,
+        seed: testMode ? TEST_SEED : undefined,
         onFrame: (f) => {
           setFrameState(f);
           setRuntimeTick((t) => t + 1);
@@ -161,6 +166,7 @@ function Editor({ engine }: { engine: Engine }) {
           else {
             session = rt;
             setRuntime(rt);
+            if (testMode) exposeTestHook(rt, engine);
           }
         },
         (e) => {
@@ -312,18 +318,8 @@ function Editor({ engine }: { engine: Engine }) {
     }
   }, [engine, changed]);
 
-  const exportHtml = useCallback(async () => {
-    const base = (filePath?.split(/[\\/]/).pop() ?? "Untitled.zoe").replace(/\.[^.]*$/, "");
-    try {
-      setMessage({ text: "Exporting…" });
-      const html = await buildHtml(engine, base);
-      const path = await saveHtml(html, `${base}.html`);
-      if (path) setMessage({ text: `Exported ${path} (${(html.length / 1048576).toFixed(1)} MB, plays offline)` });
-      else setMessage(null);
-    } catch (e) {
-      setMessage({ text: `Export failed: ${errorText(e)}`, error: true });
-    }
-  }, [engine, filePath]);
+  const [exporting, setExporting] = useState(false);
+  const exportTitle = (filePath?.split(/[\\/]/).pop() ?? "Untitled.zoe").replace(/\.[^.]*$/, "");
 
   const newDemo = useCallback((kind: "animation" | "game") => {
     engine.newDemo(kind);
@@ -553,7 +549,7 @@ function Editor({ engine }: { engine: Engine }) {
           <button onClick={() => save(false)} title="⌘S">Save</button>
           <button onClick={() => save(true)} title="⇧⌘S">Save as…</button>
           <button onClick={importDialog} title="⌘I — or drop images on the stage">Import…</button>
-          <button onClick={exportHtml} title="A single HTML file that plays this project offline">Export HTML…</button>
+          <button onClick={() => setExporting(true)} title="Publish as a web page that plays offline">Export…</button>
         </div>
         <div className="group">
           <button onClick={undo} disabled={!history.canUndo} title="⌘Z">
@@ -599,6 +595,15 @@ function Editor({ engine }: { engine: Engine }) {
         </div>
       </header>
 
+      {exporting && (
+        <ExportDialog
+          engine={engine}
+          fallbackTitle={exportTitle}
+          onClose={() => setExporting(false)}
+          onSettings={(p) => run(() => engine.setPublish(JSON.stringify(p)))}
+          onMessage={setMessage}
+        />
+      )}
       {convert && (
         <div className="modal-backdrop" onClick={() => setConvert(null)}>
           <form

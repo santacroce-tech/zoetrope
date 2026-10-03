@@ -76,6 +76,7 @@ pub fn demo_project() -> Project {
             root: SymbolId(0),
             symbols: Vec::new(),
             assets: Vec::new(),
+            publish: None,
         },
     };
 
@@ -121,6 +122,8 @@ pub fn demo_project() -> Project {
     animate(&mut b, scene, sky);
     bees_and_button(&mut b, scene);
     title_and_tune(&mut b, scene);
+    let actions = b.layer(Parent::Symbol(scene), "Actions", LayerKind::Normal);
+    b.project.layer_mut(actions).unwrap().keyframes = vec![Keyframe { script: Some(DEMO_SCRIPT.into()), ..Keyframe::blank(48) }];
 
     debug_assert!(b.project.validate().is_ok());
     b.project
@@ -346,6 +349,7 @@ pub fn game_project() -> Project {
             root: SymbolId(0),
             symbols: Vec::new(),
             assets: Vec::new(),
+            publish: None,
         },
     };
     let scene = b.symbol("Bee Catcher", SymbolKind::MovieClip);
@@ -413,6 +417,14 @@ pub fn game_project() -> Project {
     debug_assert!(b.project.validate().is_ok());
     b.project
 }
+
+/// Frame 1 of the animation demo: the ▶ button pauses and resumes it.
+pub const DEMO_SCRIPT: &str = r#"// The ▶ button pauses and resumes the movie.
+playButton.onClick = function () {
+  if (isPlaying) stop();
+  else play();
+};
+"#;
 
 /// Frame 1 ("play") of the game demo.
 pub const GAME_PLAY_SCRIPT: &str = r#"// Bee Catcher: steer with the arrow keys, catch flowers before time runs out.

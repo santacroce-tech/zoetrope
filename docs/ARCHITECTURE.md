@@ -18,7 +18,7 @@ diverge, and the UI stays a thin shell.
 │  crates/zoetrope-core (model, edits/undo, geometry, queries,       │
 │     interaction math, render walk, file format) — no platform deps │
 └────────┬───────────────────────────────────────────────────────────┘
-         │ invoke(save_project | open_project | export_html | pick_files | read_picked_file)
+         │ invoke(save_project | open_project | export_begin/write | pick_files | read_picked_file)
          ▼
   editor/src-tauri  (Rust native shell: dialogs + filesystem only)
 ```
@@ -177,6 +177,10 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
   each stream within 0.12 s of its cue position, starts events with their
   loops, and stops everything when playback stops. It holds no timing logic
   of its own, so the exported player can reuse it as is.
+* **Export**: `savePack()` / `loadPack(bytes)` (FORMAT.md, "Pack"), and
+  `publishJson()` / `setPublish(json)` for the export settings, saved with
+  the project and undoable. `playDigest()` fingerprints what the runtime shows
+  and plays, for the parity checks.
 * **Scripting**: `playScriptsJson()` drains what is due:
   `{ removed, instances, frames }`, where `instances` are symbol scripts and
   `frames` are frame scripts, each with its path, source and a readable
@@ -217,7 +221,8 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 |---------|------|---------|
 | `save_project` | `contents: string, path: string \| null` | written path, or `null` if the dialog was cancelled |
 | `open_project` | — | `{ path, contents }`, or `null` if cancelled |
-| `export_html` | `contents: string, name: string` | asks where to save an exported page (`.html`) and writes it; the path, or `null` if cancelled |
+| `export_begin` | `single: bool, name: string` | asks for the destination (a `.html` file, or a folder for folder exports) and remembers it; the path, or `null` if cancelled |
+| `export_write` | raw bytes, header `x-file-name` (percent-encoded) | writes one export file. Single-file exports go to the chosen path. Otherwise the file goes into the chosen folder, and only plain names are accepted (no separators, no leading dot). |
 | `pick_files` | `kind: "image" \| "font" \| "audio"` | `[{ path, name }]` from a native multi-select dialog filtered by kind (`[]` if cancelled) |
 | `read_picked_file` | `path: string` | raw bytes (`ArrayBuffer`), **only** for a path just returned by `pick_files`, readable once |
 
@@ -246,13 +251,21 @@ and `tauri build` run automatically. The `wasm-bindgen` crate is pinned
 
 `npm run wasm` also builds the **player bundle** (`npm run player`, using
 `vite.player.config.ts`) into `editor/player-dist/player.js`, which is
-gitignored. It is one IIFE script with the core WASM and QuickJS inlined as
-base64, about 4.1 MB. The editor imports it lazily (`?raw`) when exporting, so
-the editor's own bundle doesn't grow. **Export HTML** writes one page:
+gitignored. Both WebAssembly modules are embedded gzipped, about 1.4 MB in
+total. The editor imports it lazily (`?raw`) only when exporting. See
+EXPORT.md for formats, the page contract and the parity checks.
 
-- the player script, inline;
-- the project file, as `<script type="application/json">`, with `<` escaped
-  as `\u003c` so the page can't be broken out of;
-- a full-window letterboxed canvas.
+**Size pass (Phase 8).** The release profile uses `lto = true` and
+`codegen-units = 1`. The release build drops the 0.5 MB `name` section
+(`--remove-name-section`), and `wasm-opt -O3` runs if Binaryen is installed.
+Measured on the demo:
 
-It opens offline from `file://` and makes no network requests.
+| Build | Size | gzip | Render cost |
+|-------|------|------|-------------|
+| Phase 7 | 2.51 MB | 848 KB | 0.021 ms/frame |
+| lto + codegen-units=1, names stripped (shipped) | 1.98 MB | 713 KB | 0.021 ms/frame |
+
+`opt-level = "s"` would have saved another 2.5% at 25% slower rendering, and
+`"z"` 4.5% at three times slower, so `opt-level` stays at 3. The traversal
+benchmark is `Engine.benchTraversal(frames)`. The engine grew to 2.05 MB
+with the Phase 8 APIs. Exports carry it gzipped.

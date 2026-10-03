@@ -636,6 +636,13 @@ impl Engine {
         self.doc.project.symbol(SymbolId(symbol)).and_then(|s| s.script.clone())
     }
 
+    /// Fingerprint (16 hex digits) of what the runtime shows and plays right
+    /// now; equal in every engine playing the same project the same way.
+    #[wasm_bindgen(js_name = playDigest)]
+    pub fn play_digest(&self) -> String {
+        self.player.as_ref().map_or_else(String::new, |pl| format!("{:016x}", pl.digest(&self.doc.project)))
+    }
+
     /// The runtime's main-timeline frame (the editing frame when not playing).
     #[wasm_bindgen(js_name = playFrame)]
     pub fn play_frame(&self) -> u32 {
@@ -760,12 +767,50 @@ impl Engine {
         })
     }
 
+    /// Benchmark: renders `frames` consecutive frames of the main timeline
+    /// through a do-nothing renderer (scene walk, tweens, text layout) and
+    /// returns how many frames it rendered; the caller times it.
+    #[wasm_bindgen(js_name = benchTraversal)]
+    pub fn bench_traversal(&self, frames: u32) -> u32 {
+        let len = self.doc.project.symbol(self.doc.project.root).map_or(1, |s| s.length());
+        for f in 0..frames {
+            render_frame(&self.doc.project, f % len, RenderOptions::player(Matrix::IDENTITY), &mut zoetrope_core::render::NullRenderer);
+        }
+        frames
+    }
+
     // ----- documents -----
 
     /// `kind`: `"animation"` (default) or `"game"` (the scripted demo).
     #[wasm_bindgen(js_name = newDemo)]
     pub fn new_demo(&mut self, kind: Option<String>) {
         self.replace_document(if kind.as_deref() == Some("game") { demo::game_project() } else { demo::demo_project() });
+    }
+
+    /// The project as a binary pack (assets as raw bytes; see docs/FORMAT.md, "Pack").
+    #[wasm_bindgen(js_name = savePack)]
+    pub fn save_pack(&self) -> Vec<u8> {
+        format::save_pack(&self.doc.project)
+    }
+
+    /// Replaces the document with a pack's project (like `loadJson`).
+    #[wasm_bindgen(js_name = loadPack)]
+    pub fn load_pack(&mut self, bytes: &[u8]) -> Result<(), JsError> {
+        let project = format::load_pack(bytes).map_err(js_err)?;
+        self.replace_document(project);
+        Ok(())
+    }
+
+    /// Export settings: `{ title, scale, mode, pageColor, startOnClick }` (defaults filled in).
+    #[wasm_bindgen(js_name = publishJson)]
+    pub fn publish_json(&self) -> String {
+        to_json(&self.doc.project.publish.clone().unwrap_or_default())
+    }
+
+    #[wasm_bindgen(js_name = setPublish)]
+    pub fn set_publish(&mut self, json: &str) -> Result<(), JsError> {
+        let publish: zoetrope_core::Publish = parse("export settings", json)?;
+        ops::set_publish(&mut self.doc, publish).map_err(js_err)
     }
 
     /// Serializes the project in the versioned file format.

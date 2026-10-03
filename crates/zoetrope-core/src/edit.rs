@@ -38,6 +38,7 @@ pub enum Edit {
     RemoveSymbol { symbol: SymbolId },
     SetSymbolProps { symbol: SymbolId, name: String, kind: SymbolKind },
     SetSymbolScript { symbol: SymbolId, script: Option<String> },
+    SetPublish { publish: Option<crate::model::Publish> },
 }
 
 /// The editable, non-structural fields of a layer.
@@ -251,6 +252,7 @@ impl Edit {
                 let old = Edit::SetSymbolProps { symbol, name: std::mem::replace(&mut s.name, name), kind: std::mem::replace(&mut s.kind, kind) };
                 Ok(old)
             }
+            Edit::SetPublish { publish } => Ok(Edit::SetPublish { publish: std::mem::replace(&mut p.publish, publish) }),
             Edit::SetSymbolScript { symbol, script } => {
                 let s = p.symbol_mut(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
                 Ok(Edit::SetSymbolScript { symbol, script: std::mem::replace(&mut s.script, script) })

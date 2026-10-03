@@ -1227,6 +1227,15 @@ pub fn set_frame_label(doc: &mut Document, layers: &[LayerId], frame: u32, label
     })
 }
 
+/// Changes the export settings (one undo step).
+pub fn set_publish(doc: &mut Document, publish: Publish) -> Result<()> {
+    let publish = (publish != Publish::default()).then_some(publish);
+    if doc.project.publish == publish {
+        return Ok(());
+    }
+    doc.execute("Export Settings", vec![Edit::SetPublish { publish }])
+}
+
 /// Sets (or with `None` / blank text, removes) a symbol's script.
 pub fn set_symbol_script(doc: &mut Document, symbol: SymbolId, script: Option<&str>) -> Result<()> {
     let script = non_blank(script);

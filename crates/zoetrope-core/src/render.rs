@@ -401,6 +401,19 @@ impl Renderer for RecordingRenderer {
     }
 }
 
+/// A stable 64-bit fingerprint of a recorded frame (FNV-1a over the calls'
+/// exact values), for comparing renderings across engines: the editor
+/// preview and an exported player of the same project must agree.
+pub fn digest(ops: &[DrawOp]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    // Debug formatting prints f64s in shortest round-trip form: exact and stable.
+    for b in format!("{ops:?}").bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
 /// Renderer that does nothing; isolates traversal cost when profiling.
 pub struct NullRenderer;
 

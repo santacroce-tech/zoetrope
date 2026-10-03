@@ -4,8 +4,16 @@
 // bridge (`Engine.scriptCall`) plus `trace` and error reporting. CPU time
 // per entry and memory are capped so a runaway script can't hang the
 // editor or the exported player. See docs/SCRIPTING.md.
-import { newQuickJSWASMModuleFromVariant, type QuickJSContext, type QuickJSHandle, type QuickJSRuntime, type QuickJSWASMModule } from "quickjs-emscripten-core";
-import variant from "@jitl/quickjs-singlefile-browser-release-sync";
+import {
+  newQuickJSWASMModuleFromVariant,
+  newVariant,
+  type CustomizeVariantOptions,
+  type QuickJSContext,
+  type QuickJSHandle,
+  type QuickJSRuntime,
+  type QuickJSWASMModule,
+} from "quickjs-emscripten-core";
+import variant from "@jitl/quickjs-wasmfile-release-sync";
 import type { Engine } from "../engine";
 import { PRELUDE } from "./prelude";
 
@@ -37,10 +45,21 @@ export type ScriptEvent =
   | { type: "blur" };
 
 let modulePromise: Promise<QuickJSWASMModule> | null = null;
+let wasmSource: () => Promise<CustomizeVariantOptions> = () => Promise.reject(new Error("QuickJS location not configured"));
+
+/**
+ * Where the QuickJS WebAssembly comes from: the editor serves it as an
+ * asset URL, the exported player inflates an embedded copy. Call before
+ * the first playback.
+ */
+export function configureQuickJS(source: () => Promise<CustomizeVariantOptions>) {
+  wasmSource = source;
+  modulePromise = null;
+}
 
 /** Loads the QuickJS engine (once). */
 export function loadQuickJS(): Promise<QuickJSWASMModule> {
-  modulePromise ??= newQuickJSWASMModuleFromVariant(variant);
+  modulePromise ??= wasmSource().then((opts) => newQuickJSWASMModuleFromVariant(newVariant(variant, opts)));
   return modulePromise;
 }
 
@@ -57,6 +76,7 @@ export class ScriptHost {
     qjs: QuickJSWASMModule,
     private engine: Engine,
     private output: (line: OutputLine) => void,
+    private seed: number,
   ) {
     this.rt = qjs.newRuntime();
     this.rt.setMemoryLimit(MEMORY_LIMIT);
@@ -83,7 +103,7 @@ export class ScriptHost {
         return this.vm.newString("");
       case "stageInfo": {
         const s = JSON.parse(this.engine.stageJson());
-        return this.vm.newString(JSON.stringify({ width: s.width, height: s.height, fps: s.fps }));
+        return this.vm.newString(JSON.stringify({ width: s.width, height: s.height, fps: s.fps, seed: this.seed }));
       }
       default:
         try {

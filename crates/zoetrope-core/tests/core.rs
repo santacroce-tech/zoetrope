@@ -1320,7 +1320,7 @@ fn game_demo_is_valid_and_round_trips() {
     p.validate().unwrap();
     let json = save_to_string(&p);
     assert_eq!(load_from_str(&json).unwrap(), p);
-    assert!(json.contains("\"schemaVersion\": 5"));
+    assert!(json.contains(&format!("\"schemaVersion\": {SCHEMA_VERSION}")));
 }
 
 #[test]
@@ -1462,4 +1462,88 @@ fn v4_files_load_as_v5() {
     let mut v: Value = serde_json::from_str(&save_to_string(&demo_project())).unwrap();
     v["schemaVersion"] = json!(4);
     assert_eq!(load_from_str(&v.to_string()).unwrap(), demo_project());
+}
+
+// ---------------------------------------------------------------- Phase 8: export
+
+use zoetrope_core::format::{load_pack, save_pack, PACK_MAGIC};
+
+#[test]
+fn packs_round_trip_and_beat_json() {
+    for p in [demo_project(), game_project()] {
+        let pack = save_pack(&p);
+        assert!(pack.starts_with(PACK_MAGIC));
+        assert_eq!(load_pack(&pack).unwrap(), p);
+        let json = save_to_string(&p);
+        assert!(pack.len() < json.len() * 4 / 5, "pack {} vs json {}", pack.len(), json.len());
+    }
+}
+
+#[test]
+fn damaged_packs_are_rejected() {
+    let pack = save_pack(&demo_project());
+    assert!(load_pack(b"PK\x03\x04 not a pack").is_err());
+    assert!(load_pack(&pack[..pack.len() / 2]).is_err(), "truncated blobs");
+    assert!(load_pack(&pack[..20]).is_err(), "truncated header");
+    let mut wrong = pack.clone();
+    wrong[12..].iter_mut().take(1).for_each(|b| *b = b'!');
+    assert!(load_pack(&wrong).is_err(), "bad JSON");
+}
+
+#[test]
+fn publish_settings_are_saved_and_undoable() {
+    let mut doc = Document::new(demo_project());
+    let settings = Publish { title: "Spring".into(), scale: ScaleMode::Fill, start_on_click: true, ..Default::default() };
+    ops::set_publish(&mut doc, settings.clone()).unwrap();
+    assert_eq!(doc.project.publish.as_ref(), Some(&settings));
+    let json = save_to_string(&doc.project);
+    assert!(json.contains("\"scale\": \"fill\""));
+    assert_eq!(load_from_str(&json).unwrap(), doc.project);
+    // Back to defaults stores nothing.
+    ops::set_publish(&mut doc, Publish::default()).unwrap();
+    assert_eq!(doc.project.publish, None);
+    doc.undo().unwrap();
+    assert_eq!(doc.project.publish.as_ref(), Some(&settings));
+}
+
+/// What a viewer sees at each tick of a scripted session (frame picture +
+/// stream sounds), the way the editor preview and the exported player both
+/// drive the core.
+fn session_digests(p: &Project) -> Vec<u64> {
+    let mut pl = Player::new(p, 0);
+    let mut out = Vec::new();
+    for tick in 0..60 {
+        if tick == 5 {
+            if let Some(bee) = pl.child_named(p, &[], "bee") {
+                script_call(p, &mut pl, json!({"op": "set", "path": bee, "props": {"x": 300.0, "rotation": 15.0}}));
+            }
+        }
+        if tick == 20 {
+            pl.pointer(p, Some(Point::new(100.0, 500.0)), true);
+            pl.pointer(p, Some(Point::new(100.0, 500.0)), false);
+        }
+        out.push(pl.digest(p));
+        pl.tick(p);
+    }
+    out
+}
+
+#[test]
+fn exported_projects_play_identically() {
+    // Export = save (JSON or pack) + load in another engine. Every frame of
+    // a session must match the original, picture and sound.
+    for p in [demo_project(), game_project()] {
+        let original = session_digests(&p);
+        assert_eq!(session_digests(&load_from_str(&save_to_string(&p)).unwrap()), original);
+        assert_eq!(session_digests(&load_pack(&save_pack(&p)).unwrap()), original);
+        // Sanity: the digests do change as the movie plays.
+        assert!(original.windows(2).any(|w| w[0] != w[1]));
+    }
+}
+
+#[test]
+fn v5_files_load_as_v6() {
+    let mut v: Value = serde_json::from_str(&save_to_string(&game_project())).unwrap();
+    v["schemaVersion"] = json!(5);
+    assert_eq!(load_from_str(&v.to_string()).unwrap(), game_project());
 }

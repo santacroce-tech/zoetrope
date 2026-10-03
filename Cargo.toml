@@ -13,4 +13,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [profile.release]
+# Whole-program optimization: smaller and faster WASM. opt-level stays 3
+# ("s"/"z" saved only ~3% size at a 25–200% render-speed cost; see
+# docs/ARCHITECTURE.md, "WASM build step").
 lto = true
+codegen-units = 1

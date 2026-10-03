@@ -26,14 +26,30 @@ export async function saveProject(contents: string, path: string | null): Promis
   return name;
 }
 
-/** Saves an exported HTML page (asks where). Returns the path/name, or null if cancelled. */
-export async function saveHtml(contents: string, name: string): Promise<string | null> {
-  if (isTauri) return invoke<string | null>("export_html", { contents, name });
-  const url = URL.createObjectURL(new Blob([contents], { type: "text/html" }));
-  const a = Object.assign(document.createElement("a"), { href: url, download: name });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-  return name;
+/**
+ * Writes exported files: asks for a .html path (one file) or a folder
+ * (several). Returns where they went, or null if cancelled. In a browser,
+ * each file is downloaded.
+ */
+export async function saveExport(files: { name: string; data: string | Uint8Array }[]): Promise<string | null> {
+  const single = files.length === 1;
+  if (isTauri) {
+    const dest = await invoke<string | null>("export_begin", { single, name: files[0].name });
+    if (!dest) return null;
+    for (const f of files) {
+      const bytes = typeof f.data === "string" ? new TextEncoder().encode(f.data) : f.data;
+      await invoke("export_write", bytes, { headers: { "x-file-name": encodeURIComponent(f.name) } });
+    }
+    return dest;
+  }
+  for (const f of files) {
+    const type = f.name.endsWith(".html") ? "text/html" : f.name.endsWith(".js") ? "text/javascript" : "application/octet-stream";
+    const url = URL.createObjectURL(new Blob([f.data as BlobPart], { type }));
+    const a = Object.assign(document.createElement("a"), { href: url, download: f.name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  return single ? files[0].name : "Downloads";
 }
 
 /** Prompts for a project file. Returns null if cancelled. */
