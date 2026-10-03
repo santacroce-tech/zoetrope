@@ -50,6 +50,10 @@ pub struct Player {
     over: Option<(InstancePath, String)>,
     /// Button the current press started on.
     pressed: Option<InstancePath>,
+    /// Stream sounds active at the current frame.
+    streams: Vec<SoundCue>,
+    /// Event sounds triggered since the last `take_sound_events`.
+    events: Vec<SoundCue>,
 }
 
 impl Clock for Player {
@@ -79,19 +83,63 @@ struct Visit<'a> {
     matrix: Matrix,
 }
 
+/// What a walk of the display tree reports.
+enum Seen<'a> {
+    /// An instance, with the frame it shows.
+    Instance(Visit<'a>, u32),
+    /// A keyframe sound on a timeline at `path` (layer `layer`), `offset`
+    /// frames into its keyframe (which starts at `start`).
+    Sound { path: &'a [(u32, u32)], layer: LayerId, start: u32, offset: u32, sound: &'a SoundRef },
+}
+
+/// A sound the platform should be playing (or start now).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundCue {
+    /// Identifies this sound placement (timeline path + layer + keyframe).
+    pub key: String,
+    pub asset: AssetId,
+    pub sync: SoundSync,
+    /// Seconds into the clip it should be at now.
+    pub position: f64,
+    pub volume: f64,
+    pub loops: u32,
+}
+
+fn cue(path: &[(u32, u32)], layer: LayerId, start: u32, offset: u32, sound: &SoundRef, fps: f64) -> SoundCue {
+    let key = path.iter().map(|(l, t)| format!("{l}.{t}")).chain([format!("{}@{start}", layer.0)]).collect::<Vec<_>>().join("/");
+    SoundCue { key, asset: sound.asset, sync: sound.sync, position: offset as f64 / fps, volume: sound.volume, loops: sound.loops }
+}
+
 impl Player {
     /// A player showing root frame `frame`, with movie clips where the
     /// stateless rule puts them.
     pub fn new(p: &Project, frame: u32) -> Player {
-        let mut player = Player { frame, clips: HashMap::new(), pointer: None, down: false, over: None, pressed: None };
-        let mut clips = HashMap::new();
-        walk(p, frame, &|_, _, stateless| stateless, &mut |v: &Visit, f| {
-            if v.symbol.kind == SymbolKind::MovieClip {
-                clips.insert(v.path.to_vec(), f);
-            }
-        });
-        player.clips = clips;
+        let mut player = Player {
+            frame,
+            clips: HashMap::new(),
+            pointer: None,
+            down: false,
+            over: None,
+            pressed: None,
+            streams: Vec::new(),
+            events: Vec::new(),
+        };
+        let fps = p.stage.fps;
+        let (mut clips, mut streams, mut events) = (HashMap::new(), Vec::new(), Vec::new());
+        walk(p, frame, &|_, _, stateless| stateless, &mut |seen| collect(seen, fps, &mut clips, &mut streams, &mut events));
+        (player.clips, player.streams, player.events) = (clips, streams, events);
         player
+    }
+
+    /// Stream sounds that should be playing now, with their positions.
+    pub fn sound_streams(&self) -> &[SoundCue] {
+        &self.streams
+    }
+
+    /// Event sounds triggered since the last call.
+    pub fn take_sound_events(&mut self) -> Vec<SoundCue> {
+        std::mem::take(&mut self.events)
     }
 
     /// Advances the root and every movie clip by one frame.
@@ -110,12 +158,12 @@ impl Player {
             SymbolKind::MovieClip => advance(path, sym, stateless),
             kind => Clock::frame(me, path, kind, stateless),
         };
-        walk(p, self.frame, &frame_of, &mut |v, f| {
-            if v.symbol.kind == SymbolKind::MovieClip {
-                clips.insert(v.path.to_vec(), f);
-            }
-        });
+        let fps = p.stage.fps;
+        let (mut streams, mut events) = (Vec::new(), Vec::new());
+        walk(p, self.frame, &frame_of, &mut |seen| collect(seen, fps, &mut clips, &mut streams, &mut events));
         self.clips = clips;
+        self.streams = streams;
+        self.events.extend(events);
         self.refresh_hover(p);
     }
 
@@ -159,7 +207,8 @@ impl Player {
         };
         let mut hit: Option<(InstancePath, String)> = None;
         let me: &Player = self;
-        walk(p, self.frame, &|path, sym, stateless| Clock::frame(me, path, sym.kind, stateless), &mut |v, _| {
+        walk(p, self.frame, &|path, sym, stateless| Clock::frame(me, path, sym.kind, stateless), &mut |seen| {
+            let Seen::Instance(v, _) = seen else { return };
             if v.symbol.kind != SymbolKind::Button {
                 return;
             }
@@ -184,7 +233,24 @@ type FrameOf<'a> = dyn Fn(&[(u32, u32)], &Symbol, u32) -> u32 + 'a;
 /// Walks the display tree of the root at `frame` (guide layers excluded, as
 /// in the player). `frame_of(path, symbol, stateless)` picks each instance's
 /// frame; `visit` sees every instance (in render order) with that frame.
-fn walk(p: &Project, frame: u32, frame_of: &FrameOf, visit: &mut dyn FnMut(&Visit, u32)) {
+/// Records movie-clip frames and sound cues from a walk.
+fn collect(seen: Seen, fps: f64, clips: &mut HashMap<InstancePath, u32>, streams: &mut Vec<SoundCue>, events: &mut Vec<SoundCue>) {
+    match seen {
+        Seen::Instance(v, f) => {
+            if v.symbol.kind == SymbolKind::MovieClip {
+                clips.insert(v.path.to_vec(), f);
+            }
+        }
+        Seen::Sound { path, layer, start, offset, sound } => match sound.sync {
+            SoundSync::Stream => streams.push(cue(path, layer, start, offset, sound, fps)),
+            // Events fire on the frame their keyframe is entered.
+            SoundSync::Event if offset == 0 => events.push(cue(path, layer, start, offset, sound, fps)),
+            SoundSync::Event => {}
+        },
+    }
+}
+
+fn walk(p: &Project, frame: u32, frame_of: &FrameOf, visit: &mut dyn FnMut(Seen)) {
     #[allow(clippy::too_many_arguments)]
     fn go(
         p: &Project,
@@ -194,7 +260,7 @@ fn walk(p: &Project, frame: u32, frame_of: &FrameOf, visit: &mut dyn FnMut(&Visi
         path: &mut InstancePath,
         depth: usize,
         frame_of: &FrameOf,
-        visit: &mut dyn FnMut(&Visit, u32),
+        visit: &mut dyn FnMut(Seen),
     ) {
         if depth > MAX_NESTING_DEPTH {
             return;
@@ -204,6 +270,11 @@ fn walk(p: &Project, frame: u32, frame_of: &FrameOf, visit: &mut dyn FnMut(&Visi
             if !visible || layer.kind == LayerKind::Guide {
                 continue;
             }
+            if let Some((i, start)) = layer.keyframe_at(frame) {
+                if let Some(sound) = &layer.keyframes[i].sound {
+                    visit(Seen::Sound { path, layer: layer.id, start, offset: frame - start, sound });
+                }
+            }
             for shown in evaluate_layer_shown(layer, frame) {
                 let el = &shown.element;
                 let ElementKind::Instance { symbol: child_id, .. } = el.kind else { continue };
@@ -212,7 +283,7 @@ fn walk(p: &Project, frame: u32, frame_of: &FrameOf, visit: &mut dyn FnMut(&Visi
                 let stateless = instance_frame(child, &el.kind, &shown, frame);
                 let f = frame_of(path, child, stateless).min(child.length() - 1);
                 let em = m * el.transform.matrix();
-                visit(&Visit { path, symbol: child, name: &el.name, matrix: em }, f);
+                visit(Seen::Instance(Visit { path, symbol: child, name: &el.name, matrix: em }, f));
                 go(p, child_id, f, em, path, depth + 1, frame_of, visit);
                 path.pop();
             }

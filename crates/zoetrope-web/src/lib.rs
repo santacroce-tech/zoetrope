@@ -18,6 +18,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, ImageBitmap};
 use zoetrope_core::asset::AssetKind;
+use zoetrope_core::edit::Edit;
 use zoetrope_core::geom::Rect;
 use zoetrope_core::interact::{
     gradient_controls, path_hit, path_info, shape_from_drag, snap_point, DragMode, EditSession, EditTarget, Modifiers, PaintPart, PenSession,
@@ -34,6 +35,15 @@ use zoetrope_core::{
 
 /// Most frames `playTick` advances in one call.
 const MAX_CATCH_UP_TICKS: u32 = 240;
+
+/// Text being typed into.
+struct TextEdit {
+    id: ElementId,
+    /// The element before typing started.
+    initial: zoetrope_core::Element,
+    /// For text created by this edit: how to create it for real on commit.
+    created: Option<(LayerId, Point, ops::TextStyle, Option<f64>)>,
+}
 
 /// One level of symbol editing.
 struct EditLevel {
@@ -90,6 +100,8 @@ pub struct Engine {
     levels: Vec<EditLevel>,
     /// Runtime used during preview playback of the main timeline.
     player: Option<Player>,
+    /// Text being typed into.
+    text_edit: Option<TextEdit>,
     images: Rc<RefCell<ImageCache>>,
     /// Bumped when the document is replaced, so in-flight decodes for the
     /// old document are discarded.
@@ -130,6 +142,7 @@ impl Engine {
             frame: 0,
             levels: Vec::new(),
             player: None,
+            text_edit: None,
             images: Rc::default(),
             generation: Rc::default(),
             pool: RefCell::default(),
@@ -144,6 +157,7 @@ impl Engine {
         self.frame = 0;
         self.levels.clear();
         self.player = None;
+        self.text_edit = None;
         *self.images.borrow_mut() = ImageCache::default();
         self.generation.set(self.generation.get() + 1);
     }
@@ -179,6 +193,7 @@ impl Engine {
         self.cancel_transform();
         self.cancel_edit();
         self.pen = None;
+        let _ = self.end_text_edit();
     }
 
     /// Draws `frame` into `ctx`. `scale`/`offset_*` map stage units to canvas
@@ -378,6 +393,143 @@ impl Engine {
         ops::place_instance(&mut self.doc, LayerId(layer), SymbolId(symbol), at, self.frame).map(|e| e.0).map_err(js_err)
     }
 
+    // ----- text -----
+
+    /// Creates an (empty) text element with its box's top-left at a stage
+    /// point and starts typing into it. `style_json`:
+    /// `{ font?, size, color, align, letterSpacing, lineHeight }`.
+    #[wasm_bindgen(js_name = createText)]
+    pub fn create_text(&mut self, layer: u32, x: f64, y: f64, style_json: &str, width: Option<f64>) -> Result<u32, JsError> {
+        self.end_text_edit()?;
+        let style: ops::TextStyle = parse("text style", style_json)?;
+        let at = self.local(x, y);
+        let id = ops::create_text(&mut self.doc, LayerId(layer), at, "", &style, width, self.frame).map_err(js_err)?;
+        let initial = self.doc.project.element(id).unwrap().clone();
+        self.text_edit = Some(TextEdit { id, initial, created: Some((LayerId(layer), at, style, width)) });
+        Ok(id.0)
+    }
+
+    /// Starts typing into an existing text element; returns its text.
+    #[wasm_bindgen(js_name = beginTextEdit)]
+    pub fn begin_text_edit(&mut self, id: u32) -> Result<String, JsError> {
+        self.end_text_edit()?;
+        let e = self.doc.project.require_element(ElementId(id)).map_err(js_err)?.clone();
+        let zoetrope_core::ElementKind::Text(t) = &e.kind else { return Err(JsError::new("not a text element")) };
+        let text = t.text.clone();
+        self.text_edit = Some(TextEdit { id: e.id, initial: e, created: None });
+        Ok(text)
+    }
+
+    /// Live preview while typing (no history entry).
+    #[wasm_bindgen(js_name = updateText)]
+    pub fn update_text(&mut self, text: &str) {
+        let Some(edit) = &self.text_edit else { return };
+        if let Some(zoetrope_core::Element { kind: zoetrope_core::ElementKind::Text(t), .. }) = self.doc.project.element_mut(edit.id) {
+            t.text = text.to_string();
+        }
+    }
+
+    /// Commits the typing as one undo step and returns the element's id
+    /// (new text gets a fresh id), or `undefined` if new text was left empty
+    /// and therefore discarded without a trace in history.
+    #[wasm_bindgen(js_name = endTextEdit)]
+    pub fn end_text_edit(&mut self) -> Result<Option<u32>, JsError> {
+        let Some(edit) = self.text_edit.take() else { return Ok(None) };
+        let Some(current) = self.doc.project.element_mut(edit.id) else { return Ok(None) };
+        let typed = std::mem::replace(current, edit.initial.clone());
+        let zoetrope_core::ElementKind::Text(t) = &typed.kind else { return Ok(None) };
+        match edit.created {
+            Some((layer, at, style, width)) => {
+                // Drop the empty placeholder step, then create the text once.
+                self.doc.undo_discard().map_err(js_err)?;
+                if t.text.trim().is_empty() {
+                    return Ok(None);
+                }
+                let id = ops::create_text(&mut self.doc, layer, at, &t.text, &style, width, self.frame).map_err(js_err)?;
+                Ok(Some(id.0))
+            }
+            None => {
+                if typed != edit.initial {
+                    self.doc.execute("Edit Text", vec![Edit::ReplaceElement { element: typed }]).map_err(js_err)?;
+                }
+                Ok(Some(edit.id.0))
+            }
+        }
+    }
+
+    /// The text element being typed into, if any (undo, load, etc. end typing).
+    #[wasm_bindgen(js_name = textEditId)]
+    pub fn text_edit_id(&self) -> Option<u32> {
+        self.text_edit.as_ref().map(|e| e.id.0)
+    }
+
+    // ----- fonts & audio -----
+
+    /// `[{ id, name, family }]`
+    #[wasm_bindgen(js_name = fontsJson)]
+    pub fn fonts_json(&self) -> String {
+        let v: Vec<_> = self
+            .doc
+            .project
+            .assets
+            .iter()
+            .filter_map(|a| match &a.kind {
+                AssetKind::Font { family, .. } => Some(serde_json::json!({ "id": a.id.0, "name": a.name, "family": family })),
+                _ => None,
+            })
+            .collect();
+        to_json(&v)
+    }
+
+    /// `[{ id, name, duration, mime }]`
+    #[wasm_bindgen(js_name = audioJson)]
+    pub fn audio_json(&self) -> String {
+        let v: Vec<_> = self
+            .doc
+            .project
+            .assets
+            .iter()
+            .filter_map(|a| match &a.kind {
+                AssetKind::Audio { duration, mime, .. } => Some(serde_json::json!({ "id": a.id.0, "name": a.name, "duration": duration, "mime": mime })),
+                _ => None,
+            })
+            .collect();
+        to_json(&v)
+    }
+
+    #[wasm_bindgen(js_name = importFont)]
+    pub fn import_font(&mut self, name: &str, bytes: &[u8]) -> Result<u32, JsError> {
+        ops::import_font(&mut self.doc, name, bytes).map(|a| a.0).map_err(js_err)
+    }
+
+    /// `duration`: seconds, from the platform's decoder (which also proved the file playable).
+    #[wasm_bindgen(js_name = importAudio)]
+    pub fn import_audio(&mut self, name: &str, bytes: &[u8], duration: f64) -> Result<u32, JsError> {
+        ops::import_audio(&mut self.doc, name, bytes, duration).map(|a| a.0).map_err(js_err)
+    }
+
+    /// Raw bytes of an asset (for the platform's audio decoder).
+    #[wasm_bindgen(js_name = assetBytes)]
+    pub fn asset_bytes(&self, id: u32) -> Option<Vec<u8>> {
+        self.doc.project.asset(AssetId(id)).map(|a| a.kind.data().0.to_vec())
+    }
+
+    /// Sound on the keyframe spanning `frame`: `{ asset, sync, volume, loops }` or `null`.
+    #[wasm_bindgen(js_name = setSound)]
+    pub fn set_sound(&mut self, layers_json: &str, frame: u32, sound_json: &str) -> Result<(), JsError> {
+        let sound: Option<zoetrope_core::SoundRef> = parse("sound", sound_json)?;
+        ops::set_sound(&mut self.doc, &layer_ids(layers_json)?, frame, sound).map_err(js_err)
+    }
+
+    /// While previewing: `{ streams, events }`. Streams should be playing at
+    /// their `position`; events (drained by this call) start now.
+    #[wasm_bindgen(js_name = playAudioJson)]
+    pub fn play_audio_json(&mut self) -> String {
+        let Some(pl) = &mut self.player else { return "null".into() };
+        let events = pl.take_sound_events();
+        serde_json::json!({ "streams": pl.sound_streams(), "events": events }).to_string()
+    }
+
     // ----- preview playback (runtime clocks; main timeline only) -----
 
     /// Starts the runtime at the current frame of the main timeline.
@@ -510,9 +662,9 @@ impl Engine {
             .assets
             .iter()
             .filter(|a| !cache.bitmaps.contains_key(&a.id) && !cache.failed.contains(&a.id))
-            .map(|a| {
-                let AssetKind::Image { mime, data, .. } = &a.kind;
-                (a.id, a.name.clone(), mime.clone(), data.clone())
+            .filter_map(|a| match &a.kind {
+                AssetKind::Image { mime, data, .. } => Some((a.id, a.name.clone(), mime.clone(), data.clone())),
+                _ => None,
             })
             .collect();
         drop(cache);

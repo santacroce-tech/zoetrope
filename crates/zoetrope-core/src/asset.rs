@@ -20,6 +20,36 @@ pub struct Asset {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AssetKind {
     Image { mime: String, width: u32, height: u32, data: Bytes },
+    /// A TrueType/OpenType font file, embedded so text renders anywhere.
+    Font { family: String, data: Bytes },
+    /// An audio clip (decoded by the platform: MP3, WAV, AAC/M4A, Ogg…).
+    Audio { mime: String, duration: f64, data: Bytes },
+}
+
+impl AssetKind {
+    pub fn data(&self) -> &Bytes {
+        match self {
+            AssetKind::Image { data, .. } | AssetKind::Font { data, .. } | AssetKind::Audio { data, .. } => data,
+        }
+    }
+}
+
+/// MIME type of a supported audio file, from its header.
+pub fn sniff_audio(data: &[u8]) -> Option<&'static str> {
+    if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WAVE" {
+        Some("audio/wav")
+    } else if data.starts_with(b"ID3") || (data.len() >= 2 && data[0] == 0xFF && data[1] & 0xE0 == 0xE0 && data[1] & 0x06 != 0) {
+        // ID3 tag, or an MPEG audio frame sync (layer bits non-zero).
+        if data.len() >= 2 && data[0] == 0xFF && data[1] & 0x06 == 0 { None } else { Some("audio/mpeg") }
+    } else if data.starts_with(b"OggS") {
+        Some("audio/ogg")
+    } else if data.len() >= 12 && &data[4..8] == b"ftyp" {
+        Some("audio/mp4")
+    } else if data.starts_with(b"fLaC") {
+        Some("audio/flac")
+    } else {
+        None
+    }
 }
 
 /// Immutable shared bytes (cheap to clone into undo history), base64 in JSON.
@@ -188,5 +218,15 @@ mod tests {
         assert_eq!(sniff_image(&jpg).unwrap(), ImageInfo { mime: "image/jpeg", width: 512, height: 256 });
 
         assert!(sniff_image(b"hello world, not an image").is_err());
+    }
+
+    #[test]
+    fn sniffs_audio_headers() {
+        assert_eq!(sniff_audio(b"RIFF\0\0\0\0WAVEfmt "), Some("audio/wav"));
+        assert_eq!(sniff_audio(b"ID3\x04\0\0\0\0\0\0"), Some("audio/mpeg"));
+        assert_eq!(sniff_audio(&[0xFF, 0xFB, 0x90, 0x00]), Some("audio/mpeg"));
+        assert_eq!(sniff_audio(b"OggS\0\x02"), Some("audio/ogg"));
+        assert_eq!(sniff_audio(b"\0\0\0\x20ftypM4A "), Some("audio/mp4"));
+        assert_eq!(sniff_audio(b"definitely not audio"), None);
     }
 }

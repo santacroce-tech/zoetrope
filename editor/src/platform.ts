@@ -33,10 +33,23 @@ export async function openProject(): Promise<OpenedFile | null> {
   return file ? { path: file.name, contents: await file.text() } : null;
 }
 
+export type ImportKind = "image" | "font" | "audio";
+
+const ACCEPT: Record<ImportKind, string> = {
+  image: "image/png,image/jpeg,image/gif",
+  font: ".ttf,.otf,font/ttf,font/otf",
+  audio: "audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac",
+};
+
 /** Prompts for image files (multi-select). Returns [] if cancelled. */
-export async function importImages(): Promise<PickedBinary[]> {
+export function importImages(): Promise<PickedBinary[]> {
+  return importFiles("image");
+}
+
+/** Prompts for files of a kind (multi-select). Returns [] if cancelled. */
+export async function importFiles(kind: ImportKind): Promise<PickedBinary[]> {
   if (isTauri) {
-    const picked = await invoke<{ path: string; name: string }[]>("pick_images");
+    const picked = await invoke<{ path: string; name: string }[]>("pick_files", { kind });
     return Promise.all(
       picked.map(async ({ path, name }) => ({
         name,
@@ -44,7 +57,7 @@ export async function importImages(): Promise<PickedBinary[]> {
       })),
     );
   }
-  const files = await pickBrowserFiles("image/png,image/jpeg,image/gif", true);
+  const files = await pickBrowserFiles(ACCEPT[kind], true);
   return Promise.all(files.map(fileToBinary));
 }
 

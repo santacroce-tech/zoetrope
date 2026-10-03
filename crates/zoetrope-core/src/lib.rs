@@ -20,6 +20,7 @@ pub mod paint;
 pub mod player;
 pub mod query;
 pub mod render;
+pub mod text;
 pub mod timeline;
 pub mod vector;
 

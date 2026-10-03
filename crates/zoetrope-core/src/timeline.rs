@@ -28,12 +28,58 @@ pub struct Keyframe {
     pub elements: Vec<Element>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tween: Option<Tween>,
+    /// A sound that starts with this keyframe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<SoundRef>,
 }
 
 impl Keyframe {
     pub fn blank(duration: u32) -> Keyframe {
-        Keyframe { duration, elements: Vec::new(), tween: None }
+        Keyframe { duration, elements: Vec::new(), tween: None, sound: None }
     }
+
+    pub fn with(duration: u32, elements: Vec<Element>) -> Keyframe {
+        Keyframe { elements, ..Keyframe::blank(duration) }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SoundSync {
+    /// Starts when the playhead reaches the keyframe and plays to its end,
+    /// independently of the timeline (Flash "event").
+    #[default]
+    Event,
+    /// Locked to the timeline: plays only while this keyframe's span is
+    /// shown, at the position matching the frame (Flash "stream").
+    Stream,
+}
+
+fn one_f64() -> f64 {
+    1.0
+}
+
+fn is_one_f64(v: &f64) -> bool {
+    *v == 1.0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundRef {
+    /// An audio asset.
+    pub asset: AssetId,
+    #[serde(default)]
+    pub sync: SoundSync,
+    /// 0..=1.
+    #[serde(default = "one_f64", skip_serializing_if = "is_one_f64")]
+    pub volume: f64,
+    /// Event sounds: extra repetitions after the first play.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub loops: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

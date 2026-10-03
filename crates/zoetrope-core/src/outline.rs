@@ -27,6 +27,8 @@ pub struct KeyframeView {
     pub empty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tween: Option<Tween>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sound: Option<SoundRef>,
 }
 
 pub fn layer_tree(project: &Project, symbol: SymbolId) -> Vec<LayerNode> {
@@ -44,7 +46,13 @@ pub fn layer_tree(project: &Project, symbol: SymbolId) -> Vec<LayerNode> {
                     .keyframes
                     .iter()
                     .enumerate()
-                    .map(|(i, k)| KeyframeView { start: l.keyframe_start(i), duration: k.duration, empty: k.elements.is_empty(), tween: k.tween.clone() })
+                    .map(|(i, k)| KeyframeView {
+                        start: l.keyframe_start(i),
+                        duration: k.duration,
+                        empty: k.elements.is_empty(),
+                        tween: k.tween.clone(),
+                        sound: k.sound.clone(),
+                    })
                     .collect(),
                 children: go(&l.children),
             })
@@ -80,6 +88,7 @@ pub fn element_info(project: &Project, id: ElementId, frame: u32) -> Option<Elem
     let source_name = match e.kind {
         ElementKind::Bitmap { asset } => project.asset(asset).map(|a| a.name.clone()),
         ElementKind::Instance { symbol, .. } => project.symbol(symbol).map(|s| s.name.clone()),
+        ElementKind::Text(ref t) => project.asset(t.font).map(|a| a.name.clone()),
         ElementKind::Shape(_) => None,
     };
     Some(ElementInfo {

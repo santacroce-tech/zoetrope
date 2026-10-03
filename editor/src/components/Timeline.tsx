@@ -285,6 +285,15 @@ function drawCells(
         g.strokeStyle = "#8a8a9a";
         g.strokeRect(x1 - CELL + 2.5, y + 7.5, CELL - 5, ROW - 15);
       }
+      if (k.sound) {
+        // Sound: a line along the span for streams (they play only while it lasts), a note for both.
+        g.fillStyle = "#7fd1ff";
+        if (k.sound.sync === "stream") g.fillRect(x0 + 2, y + ROW - 5, x1 - x0 - 3, 2);
+        if (k.duration > 1) {
+          g.font = "10px system-ui, sans-serif";
+          g.fillText("♪", x0 + CELL + 1, y + ROW / 2 + 4);
+        }
+      }
       // Keyframe dot: filled = has content, hollow = blank.
       g.beginPath();
       g.arc(x0 + CELL / 2 + 0.5, y + ROW / 2, 3.2, 0, Math.PI * 2);

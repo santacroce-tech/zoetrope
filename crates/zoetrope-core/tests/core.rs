@@ -72,8 +72,8 @@ fn demo_is_nested_and_valid() {
     p.validate().unwrap();
     let ops = record(&p);
     // sky, ground, sun, cloud + 3 flowers × (stem + 6 petals + center)
-    // + bee (body, 2 stripes, 2 wings) + button Up (face, icon)
-    assert_eq!(count(&ops, |o| matches!(o, DrawOp::Fill { .. })), 4 + 3 * (1 + 6 + 1) + 5 + 2);
+    // + bee (body, 2 stripes, 2 wings) + button Up (face, icon) + title text
+    assert_eq!(count(&ops, |o| matches!(o, DrawOp::Fill { .. })), 4 + 3 * (1 + 6 + 1) + 5 + 2 + 1);
     // petals+center strokes ×3, guide line, cloud outline, bee (body, 2 wings), button face
     assert_eq!(count(&ops, |o| matches!(o, DrawOp::Stroke { .. })), 3 * (6 + 1) + 2 + 3 + 1);
     assert!(matches!(ops.first(), Some(DrawOp::Begin(_))));
@@ -400,7 +400,7 @@ fn image_import_embeds_asset_and_round_trips() {
     assert_eq!(loaded, doc.project);
 
     doc.undo().unwrap();
-    assert!(doc.project.assets.is_empty() && doc.project.element(id).is_none());
+    assert!(doc.project.assets.iter().all(|a| a.name != "photo.png") && doc.project.element(id).is_none());
     assert!(ops::import_image(&mut doc, layer, "x.txt", b"not an image at all", Point::default(), 0).is_err());
 }
 
@@ -930,7 +930,7 @@ fn v2_files_migrate_to_keyframes() {
     assert_eq!(inner.keyframes[0].elements[0].id, ElementId(4));
     assert_eq!(p.layer(LayerId(5)).unwrap().keyframes, vec![Keyframe::blank(1)]);
     assert!(p.layer(LayerId(2)).unwrap().keyframes.is_empty());
-    assert!(save_to_string(&p).contains("\"schemaVersion\": 3"));
+    assert!(save_to_string(&p).contains(&format!("\"schemaVersion\": {SCHEMA_VERSION}")));
 }
 
 #[test]
@@ -1170,4 +1170,135 @@ fn edits_inside_a_symbol_use_symbol_space() {
     s.commit(&mut doc).unwrap();
     let t = doc.project.element(center).unwrap().transform;
     assert_eq!((t.x, t.y), (10.0, -10.0));
+}
+
+// ---------- Phase 6: text & audio ----------
+
+use zoetrope_core::ops::TextStyle;
+use zoetrope_core::text::{TextAlign, DEFAULT_FONT};
+
+fn fonts(p: &Project) -> usize {
+    p.assets.iter().filter(|a| matches!(a.kind, zoetrope_core::asset::AssetKind::Font { .. })).count()
+}
+
+#[test]
+fn text_embeds_its_font_and_renders_as_paths() {
+    let mut p = demo_project();
+    // Start from a project without the bundled font.
+    p.symbol_mut(p.root).unwrap().layers.retain(|l| l.name != "Title");
+    p.assets.retain(|a| !matches!(a.kind, zoetrope_core::asset::AssetKind::Font { .. }));
+    let mut doc = Document::new(p);
+    assert_eq!(fonts(&doc.project), 0);
+    let layer = layer_named(&doc.project, "Flowers");
+    let style = TextStyle { size: 40.0, color: Color::rgb(200, 0, 0), ..Default::default() };
+    let a = ops::create_text(&mut doc, layer, Point::new(100.0, 100.0), "Hello", &style, None, 0).unwrap();
+    let b = ops::create_text(&mut doc, layer, Point::new(100.0, 200.0), "World", &style, None, 0).unwrap();
+    assert_eq!(fonts(&doc.project), 1, "the default font is embedded once");
+    let ops_ = record(&doc.project);
+    assert!(ops_.iter().any(|o| matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, transform, .. }
+        if *color == Color::rgb(200, 0, 0) && transform.e == 100.0 && transform.f == 100.0)));
+    // Bounds = the laid-out box; the whole box is clickable.
+    let e = doc.project.element(a).unwrap();
+    let bx = element_bounds(&doc.project, e, 0).unwrap();
+    assert_eq!((bx.min.x, bx.min.y), (100.0, 100.0));
+    assert!(bx.width() > 60.0 && bx.height() > 40.0);
+    let scope = Scope::root(&doc.project);
+    assert_eq!(zoetrope_core::query::hit_test(&doc.project, &scope, Point::new(bx.max.x - 1.0, bx.max.y - 1.0), 0.0), Some(a));
+    // Text properties patch like any other.
+    ops::patch_element(&mut doc, b, &json!({"text": "Wide\nLines", "align": "center", "size": 20, "width": 300})).unwrap();
+    let ElementKind::Text(t) = doc.project.element(b).unwrap().kind.clone() else { panic!() };
+    assert_eq!((t.text.as_str(), t.align, t.width), ("Wide\nLines", TextAlign::Center, Some(300.0)));
+    assert!(ops::patch_element(&mut doc, b, &json!({"size": -1})).is_err());
+    let sun = find(&doc.project, "sun");
+    assert!(ops::patch_element(&mut doc, sun, &json!({"text": "x"})).is_err());
+    // Paint styles fit gradients to the text box; text has no stroke.
+    let stops = vec![GradientStop { offset: 0.0, color: Color::BLACK }, GradientStop { offset: 1.0, color: Color::WHITE }];
+    ops::set_paint_style(&mut doc, &[b], PaintPart::Fill, Some(&PaintStyle::Linear { stops })).unwrap();
+    let ElementKind::Text(g) = &doc.project.element(b).unwrap().kind else { panic!() };
+    assert!(matches!(&g.fill, Paint::Linear { end, .. } if (end.x - 300.0).abs() < 1e-9));
+    assert!(ops::set_paint_style(&mut doc, &[b], PaintPart::Stroke, Some(&PaintStyle::Solid { color: Color::BLACK })).is_err());
+    assert!(ops::set_paint_style(&mut doc, &[b], PaintPart::Fill, None).is_err());
+    // The font can't be deleted while text uses it.
+    let font = t.font;
+    assert!(doc.execute("bad", vec![Edit::RemoveAsset { asset: font }]).is_err());
+    // Round trip and undo.
+    let json = save_to_string(&doc.project);
+    assert_eq!(load_from_str(&json).unwrap(), doc.project);
+    assert_eq!(record(&load_from_str(&json).unwrap()), record(&doc.project));
+    for _ in 0..4 {
+        doc.undo().unwrap();
+    }
+    assert_eq!(fonts(&doc.project), 0);
+}
+
+#[test]
+fn fonts_import_and_validate() {
+    let mut doc = Document::new(demo_project());
+    let id = ops::import_font(&mut doc, "copy.ttf", DEFAULT_FONT).unwrap();
+    assert!(matches!(&doc.project.asset(id).unwrap().kind, zoetrope_core::asset::AssetKind::Font { family, .. } if family == "Zoetrope Sans"));
+    assert!(ops::import_font(&mut doc, "junk.ttf", b"nope").is_err());
+    let style = TextStyle { font: Some(id), ..Default::default() };
+    let layer = layer_named(&doc.project, "Flowers");
+    assert!(ops::create_text(&mut doc, layer, Point::default(), "x", &style, None, 0).is_ok());
+    let bad = TextStyle { font: Some(find(&doc.project, "sun").0.into_asset()), ..Default::default() };
+    assert!(ops::create_text(&mut doc, layer, Point::default(), "x", &bad, None, 0).is_err());
+}
+
+trait IntoAsset {
+    fn into_asset(self) -> AssetId;
+}
+impl IntoAsset for u32 {
+    fn into_asset(self) -> AssetId {
+        AssetId(self)
+    }
+}
+
+#[test]
+fn audio_import_sound_cues_and_validation() {
+    let mut doc = Document::new(demo_project());
+    let wav = zoetrope_core::demo::chime_wav();
+    let clip = ops::import_audio(&mut doc, "beep.wav", &wav, 2.0).unwrap();
+    assert!(ops::import_audio(&mut doc, "x.wav", b"not audio", 1.0).is_err());
+    assert!(ops::import_audio(&mut doc, "y.wav", &wav, f64::NAN).is_err());
+    let bees = layer_named(&doc.project, "Bees");
+    // An event sound on the keyframe starting at frame 8.
+    ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: clip, sync: SoundSync::Event, volume: 0.5, loops: 1 })).unwrap();
+    assert!(ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: clip, sync: SoundSync::Event, volume: 2.0, loops: 0 })).is_err());
+    let sun_id = find(&doc.project, "sun").0;
+    assert!(ops::set_sound(&mut doc, &[bees], 8, Some(SoundRef { asset: AssetId(sun_id), sync: SoundSync::Event, volume: 1.0, loops: 0 })).is_err());
+    // The clip can't be removed while a keyframe uses it.
+    assert!(doc.execute("bad", vec![Edit::RemoveAsset { asset: clip }]).is_err());
+
+    let p = &doc.project;
+    let mut pl = Player::new(p, 0);
+    // The demo's tune streams in sync from frame 0.
+    let streams = pl.sound_streams().to_vec();
+    assert_eq!(streams.len(), 1);
+    assert_eq!((streams[0].position, streams[0].sync), (0.0, SoundSync::Stream));
+    assert!(pl.take_sound_events().is_empty());
+    for _ in 0..8 {
+        pl.tick(p);
+    }
+    // Frame 8: the stream is 8/24 s in; the event fires exactly once.
+    assert!((pl.sound_streams()[0].position - 8.0 / 24.0).abs() < 1e-12);
+    let ev = pl.take_sound_events();
+    assert_eq!(ev.len(), 1);
+    assert_eq!((ev[0].asset, ev[0].volume, ev[0].loops), (clip, 0.5, 1));
+    pl.tick(p);
+    assert!(pl.take_sound_events().is_empty());
+    // Removing the sound is an undoable timeline edit.
+    ops::set_sound(&mut doc, &[bees], 8, None).unwrap();
+    assert!(doc.project.layer(bees).unwrap().keyframes[1].sound.is_none());
+    doc.undo().unwrap();
+    assert!(doc.project.layer(bees).unwrap().keyframes[1].sound.is_some());
+    let json = save_to_string(&doc.project);
+    assert_eq!(load_from_str(&json).unwrap(), doc.project);
+}
+
+#[test]
+fn v3_files_load_as_v4() {
+    let mut v: Value = serde_json::from_str(&save_to_string(&demo_project())).unwrap();
+    v["schemaVersion"] = json!(3);
+    let p = load_from_str(&v.to_string()).unwrap();
+    assert_eq!(p, demo_project());
 }

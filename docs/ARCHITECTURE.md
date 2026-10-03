@@ -18,7 +18,7 @@ diverge, and the UI stays a thin shell.
 │  crates/zoetrope-core (model, edits/undo, geometry, queries,       │
 │     interaction math, render walk, file format) — no platform deps │
 └────────┬───────────────────────────────────────────────────────────┘
-         │ invoke(save_project | open_project | pick_images | read_picked_file)
+         │ invoke(save_project | open_project | pick_files | read_picked_file)
          ▼
   editor/src-tauri  (Rust native shell: dialogs + filesystem only)
 ```
@@ -30,7 +30,7 @@ with a minimal JS bootstrap instead of the React editor.
 
 | Module     | Responsibility |
 |------------|----------------|
-| `model`    | `Project → Symbol → Layer tree → Element`. Elements are `Shape`, `Bitmap` or `Instance` (of another symbol), so the evaluated scene is a **tree of instances**. Also covers `Transform` (with pivot) and its matrix decomposition, appearance (opacity/blend/tint), and validation. |
+| `model`    | `Project → Symbol → Layer tree → Element`. Elements are `Shape`, `Bitmap`, `Text` or `Instance` (of another symbol), so the evaluated scene is a **tree of instances**. Also covers `Transform` (with pivot) and its matrix decomposition, appearance (opacity/blend/tint), and validation. |
 | `edit`     | `Edit`: primitive mutations (transforms, element insert/remove/replace/reorder, layer insert/remove/props, assets, stage). `Edit::apply` validates and returns the exact inverse. |
 | `history`  | `Document` = project + undo/redo. `execute(label, edits)` is atomic (it rolls back on failure). Dirty tracking uses state ids. |
 | `ops`      | High-level commands that build `Edit`s: move, duplicate, delete, patch properties, resize, create shapes, import images, align/distribute, arrange, layer add/delete/move/props, stage. The UI only calls these. |
@@ -38,11 +38,12 @@ with a minimal JS bootstrap instead of the React editor.
 | `interact` | Direct-manipulation math: `TransformSession` (move/scale/rotate/skew/pivot drags with modifiers), `EditSession` (anchor/handle/gradient drags), `PenSession` (the pen tool's state machine), snapping (grid, objects, stage), shape-tool drags (incl. polygon/star). |
 | `vector`   | Editable `VectorPath` (subpaths of anchors with bezier handles): primitive→path conversion, split/insert, delete, convert corner⇄smooth, handle constraints, nearest-point, freehand fitting (RDP simplification + Catmull-Rom smoothing), polystar. |
 | `timeline` | Keyframes, tweens and easing (presets + cubic-bezier). `evaluate_layer(layer, frame)` produces the elements shown at a frame (interpolated when tweened); also covers path morphing for shape tweens. |
-| `player`   | The runtime: a stateful tree of per-instance clocks (movie clips) plus button pointer state and events (`Press`, `Click`). `tick`, `pointer`, `render`. Shared later by the exported player and scripting. |
+| `player`   | The runtime: a stateful tree of per-instance clocks (movie clips) plus button pointer state and events (`Press`, `Click`), and sound cues (stream positions, triggered events). `tick`, `pointer`, `render`, `sound_streams`, `take_sound_events`. Shared later by the exported player and scripting. |
+| `text`     | Static text: shaping with rustybuzz (kerning, ligatures), wrapping, alignment, glyph outlines → `Path`. Bundles the default font (Zoetrope Sans). The only text dependency; renderers only ever fill paths. |
 | `paint`    | `Paint` (solid, linear, radial with focal point), `PaintStyle` (geometry-free tool form, fitted to shapes), `Stroke` (caps, joins, miter, dashes), `FillRule`. |
 | `geom`     | `Path` (move/line/quad/cubic/close), deterministic flattening, containment (non-zero / even-odd), outline distance, `Rect`. |
 | `render`   | `Renderer` trait, `render_frame` tree walk, `RecordingRenderer` (tests/determinism), `NullRenderer` (profiling). |
-| `asset`    | Embedded assets: base64 (de)serialization and PNG/JPEG/GIF header sniffing, so the core is the authority on image size. |
+| `asset`    | Embedded assets (images, fonts, audio): base64 (de)serialization, PNG/JPEG/GIF header sniffing (so the core is the authority on image size), and audio container sniffing. |
 | `format`   | Versioned JSON envelope, migration chain, validation. See FORMAT.md. |
 | `outline`  | Panel views: the layer tree and per-element info. |
 | `demo`     | The built-in demo scene. |
@@ -143,6 +144,22 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 * **Preview runtime** (main timeline only): `playStart`, `playTick(n)`
   (returns the main frame; capped per call), `playPointer` (button state and
   events), `playRender`, `playStop`.
+* **Text**: `createText(layer, x, y, style, width?)` creates an empty text and
+  starts typing into it. `beginTextEdit(id)` starts typing into an existing
+  one. `updateText(s)` previews live with no history entry. `endTextEdit()`
+  commits one undo step; a new text that was left empty is discarded without
+  a trace in history. `textEditId()` lets the UI notice when undo, load or
+  playback ended the typing. The UI's text field only captures keystrokes
+  (and IME input), and the canvas shows the real shaped result.
+* **Fonts & audio**: `fontsJson`, `importFont(name, bytes)`, `audioJson`,
+  `importAudio(name, bytes, duration)`, `assetBytes(id)` (for the platform's
+  decoder), `setSound(layers, frame, sound)`, and `playAudioJson()` (during
+  preview: `{ streams, events }`, where events are drained by the call).
+  `editor/src/audio.ts` (`AudioEngine`) applies that state with WebAudio. It
+  decodes buffers once and preloads them before playback starts. It keeps
+  each stream within 0.12 s of its cue position, starts events with their
+  loops, and stops everything when playback stops. It holds no timing logic
+  of its own, so the exported player can reuse it as is.
 * **Pen**: `penDown` / `penDrag` / `penUp` / `penHover` feed the core's pen
   state machine. `penPreviewJson` returns what to draw, and `penFinish`
   creates the path. **Pencil**: the UI collects raw pointer samples and
@@ -166,8 +183,8 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 |---------|------|---------|
 | `save_project` | `contents: string, path: string \| null` | written path, or `null` if the dialog was cancelled |
 | `open_project` | — | `{ path, contents }`, or `null` if cancelled |
-| `pick_images` | — | `[{ path, name }]` from a native multi-select dialog (`[]` if cancelled) |
-| `read_picked_file` | `path: string` | raw bytes (`ArrayBuffer`), **only** for a path just returned by `pick_images`, readable once |
+| `pick_files` | `kind: "image" \| "font" \| "audio"` | `[{ path, name }]` from a native multi-select dialog filtered by kind (`[]` if cancelled) |
+| `read_picked_file` | `path: string` | raw bytes (`ArrayBuffer`), **only** for a path just returned by `pick_files`, readable once |
 
 The shell treats project contents as opaque strings and never parses them.
 Dialogs open from Rust, so JS is granted no dialog/fs permissions
@@ -188,5 +205,6 @@ wasm-bindgen --target web --out-dir editor/src/wasm/pkg target/wasm32-unknown-un
 This is wrapped in `scripts/build-wasm.sh` (`npm run wasm`), which `tauri dev`
 and `tauri build` run automatically. The `wasm-bindgen` crate is pinned
 (`=0.2.126`) and must match the CLI version. The module was ~700 KB unoptimized
-(~230 KB gzipped) in Phase 2 and ~1 MB after Phase 3. A size pass
+(~230 KB gzipped) in Phase 2, ~1 MB after Phase 3, and 2.37 MB after Phase 6
+(rustybuzz plus the ~97 KB bundled font). A size pass
 (`wasm-opt`, `opt-level = "s"`) is planned for the export phase.

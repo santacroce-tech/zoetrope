@@ -14,12 +14,18 @@ import {
   type TweenKind,
   type LibraryItem,
   type LoopMode,
+  type FontAsset,
+  type AudioAsset,
+  type SoundRef,
+  type SoundSync,
   SYMBOL_KIND_ICON,
   SYMBOL_KIND_LABEL,
 } from "../engine";
 import { ColorField, NumberField } from "./fields";
 import { GradientEditor } from "./GradientEditor";
 import { EasingEditor } from "./EasingEditor";
+import { AlignButtons, FontSelect } from "./ToolPalette";
+import { describeImport, importAudio } from "../assets";
 
 interface Props {
   engine: Engine;
@@ -31,6 +37,8 @@ interface Props {
   frameTarget: { layer: LayerNode; frame: number } | null;
   library: LibraryItem[];
   onEditInstance: (id: number) => void;
+  onImportFont: () => void;
+  onMessage: (m: { text: string; error?: boolean }) => void;
   /** Runs a core command, reporting errors and refreshing views. */
   run: (fn: () => unknown) => void;
 }
@@ -58,16 +66,17 @@ function kindLabel(info: ElementInfo): string {
   const e = info.element;
   if (e.type === "bitmap") return `Bitmap — ${info.sourceName ?? "?"}`;
   if (e.type === "instance") return `Instance of ${info.sourceName ?? "?"}`;
+  if (e.type === "text") return "Text";
   return { rect: "Rectangle", ellipse: "Ellipse", line: "Line", path: "Path" }[e.geometry!.kind];
 }
 
-export function PropertiesPanel({ engine, selection, stage, layers, frameTarget, library, onEditInstance, run }: Props) {
+export function PropertiesPanel({ engine, selection, stage, layers, frameTarget, library, onEditInstance, onImportFont, onMessage, run }: Props) {
   const [toStage, setToStage] = useState(false);
   const infos: ElementInfo[] = selection.map((id) => JSON.parse(engine.elementJson(id))).filter(Boolean);
   const ids = JSON.stringify(selection);
   const patch = (p: object) => run(() => engine.patchElements(ids, JSON.stringify(p)));
 
-  if (frameTarget) return <FramePanel engine={engine} target={frameTarget} run={run} />;
+  if (frameTarget) return <FramePanel engine={engine} target={frameTarget} run={run} onMessage={onMessage} />;
   if (infos.length === 0) return <StagePanel engine={engine} stage={stage} run={run} />;
 
   const first = infos[0];
@@ -185,6 +194,8 @@ export function PropertiesPanel({ engine, selection, stage, layers, frameTarget,
           )}
         </div>
       </section>
+
+      {infos.every((i) => i.element.type === "text") && <TextSection engine={engine} infos={infos} run={run} onImportFont={onImportFont} />}
 
       {allShapes && (
         <FillStrokeSection engine={engine} infos={infos} closedShapes={closedShapes} run={run} />
@@ -449,7 +460,7 @@ function FillStrokeSection(props: { engine: Engine; infos: ElementInfo[]; closed
   );
 }
 
-function FramePanel({ engine, target, run }: { engine: Engine; target: { layer: LayerNode; frame: number }; run: Props["run"] }) {
+function FramePanel({ engine, target, run, onMessage }: { engine: Engine; target: { layer: LayerNode; frame: number }; run: Props["run"]; onMessage: Props["onMessage"] }) {
   const { layer, frame } = target;
   if (layer.kind === "folder") {
     return (
@@ -518,6 +529,7 @@ function FramePanel({ engine, target, run }: { engine: Engine; target: { layer: 
           </>
         )}
       </section>
+      {kf && <SoundSection engine={engine} layer={layer.id} start={kf.start} duration={kf.duration} sound={kf.sound ?? null} run={run} onMessage={onMessage} />}
     </div>
   );
 }
@@ -568,6 +580,144 @@ function InstanceSection(props: { engine: Engine; info: ElementInfo; library: Li
       )}
       {sym?.kind === "movieClip" && <p className="hint flush">Runs its own timeline from when it appears (see it with ▶ play).</p>}
       {sym?.kind === "button" && <p className="hint flush">Up / Over / Down / Hit frames. Hover and press it while playing (▶).</p>}
+    </section>
+  );
+}
+
+function TextSection(props: { engine: Engine; infos: ElementInfo[]; run: Props["run"]; onImportFont: () => void }) {
+  const { engine, infos, run } = props;
+  const ids = JSON.stringify(infos.map((i) => i.element.id));
+  const e = infos[0].element;
+  const fill = e.fill;
+  const patch = (p: object) => run(() => engine.patchElements(ids, JSON.stringify(p)));
+  const setFill = (style: PaintStyle | null) => style && run(() => engine.setPaintStyle(ids, "fill", JSON.stringify(style)));
+  const fonts: FontAsset[] = JSON.parse(engine.fontsJson());
+  return (
+    <section>
+      <h4>Text</h4>
+      {infos.length === 1 && (
+        <textarea
+          key={`${e.id}:${e.text}`}
+          className="text-content"
+          defaultValue={e.text}
+          rows={Math.min(6, Math.max(2, (e.text ?? "").split("\n").length))}
+          title="Content (double-click the text on stage to type in place)"
+          onBlur={(ev) => ev.target.value !== e.text && patch({ text: ev.target.value })}
+        />
+      )}
+      <div className="row">
+        <span className="field-label">Font</span>
+        <FontSelect fonts={fonts} value={e.font ?? null} onChange={(font) => font !== null && patch({ font })} onImport={props.onImportFont} />
+      </div>
+      <div className="grid2">
+        <NumberField label="Size" precision={1} min={1} max={1000} value={e.size ?? 32} onCommit={(size) => patch({ size })} />
+        <NumberField label="Spacing" title="Letter spacing" precision={1} min={-100} max={500} value={e.letterSpacing ?? 0} onCommit={(letterSpacing) => patch({ letterSpacing })} />
+        <NumberField label="Line" title="Line height (× size)" precision={2} min={0.1} max={10} value={e.lineHeight ?? 1.25} onCommit={(lineHeight) => patch({ lineHeight })} />
+        <NumberField
+          label="Box W"
+          title="Wrap width (0 = auto width)"
+          precision={0}
+          min={0}
+          value={e.width ?? 0}
+          onCommit={(w) => patch({ width: w > 0 ? w : null })}
+        />
+      </div>
+      <div className="row">
+        <span className="field-label">Align</span>
+        <AlignButtons value={e.align ?? "left"} onChange={(align) => patch({ align })} />
+      </div>
+      <div className="row">
+        <span className="field-label">Fill</span>
+        <select value={fill?.type ?? "solid"} onChange={(ev) => setFill(styleFor(ev.target.value as PaintKind, fill, "#222222"))}>
+          <option value="solid">Solid</option>
+          <option value="linear">Linear gradient</option>
+          <option value="radial">Radial gradient</option>
+        </select>
+        {fill?.type === "solid" && <ColorField value={fill.color} onCommit={(color) => patch({ fill: { type: "solid", color } })} />}
+      </div>
+      {fill && fill.type !== "solid" && (
+        <GradientEditor
+          kind={fill.type}
+          stops={fill.stops}
+          onChange={(stops) => (infos.length === 1 ? patch({ fill: { ...fill, stops } }) : setFill({ type: fill.type, stops }))}
+        />
+      )}
+    </section>
+  );
+}
+
+function SoundSection(props: {
+  engine: Engine;
+  layer: number;
+  start: number;
+  duration: number;
+  sound: SoundRef | null;
+  run: Props["run"];
+  onMessage: Props["onMessage"];
+}) {
+  const { engine, layer, start, sound, run } = props;
+  const clips: AudioAsset[] = JSON.parse(engine.audioJson());
+  const set = (s: SoundRef | null) => run(() => engine.setSound(JSON.stringify([layer]), start, JSON.stringify(s)));
+  const clip = sound ? clips.find((c) => c.id === sound.asset) : undefined;
+  const fps = JSON.parse(engine.stageJson()).fps as number;
+
+  const importClip = async () => {
+    try {
+      const r = await importAudio(engine);
+      if (r.ids.length) set({ asset: r.ids[r.ids.length - 1], sync: sound?.sync ?? "stream", volume: sound?.volume ?? 1, loops: sound?.loops ?? 0 });
+      if (r.ids.length || r.errors.length) props.onMessage(describeImport("sound", r));
+    } catch (e) {
+      props.onMessage({ text: `Import failed: ${e instanceof Error ? e.message : String(e)}`, error: true });
+    }
+  };
+
+  return (
+    <section>
+      <h4>Sound</h4>
+      <div className="row">
+        <span className="field-label">Clip</span>
+        <select
+          value={sound?.asset ?? ""}
+          onChange={(ev) => {
+            if (ev.target.value === "import") return void importClip();
+            const asset = ev.target.value === "" ? null : Number(ev.target.value);
+            set(asset === null ? null : { asset, sync: sound?.sync ?? "stream", volume: sound?.volume ?? 1, loops: sound?.loops ?? 0 });
+          }}
+        >
+          <option value="">None</option>
+          {clips.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name} ({c.duration.toFixed(1)}s)
+            </option>
+          ))}
+          <option value="import">Import sound…</option>
+        </select>
+      </div>
+      {sound && (
+        <>
+          <div className="row">
+            <span className="field-label">Sync</span>
+            <select
+              value={sound.sync}
+              title="Stream: locked to the timeline (scrubs, stops with the span). Event: plays to the end once its keyframe is reached."
+              onChange={(ev) => set({ ...sound, sync: ev.target.value as SoundSync })}
+            >
+              <option value="stream">Stream</option>
+              <option value="event">Event</option>
+            </select>
+          </div>
+          <div className="grid2">
+            <NumberField label="Volume" suffix="%" precision={0} min={0} max={100} value={(sound.volume ?? 1) * 100} onCommit={(v) => set({ ...sound, volume: v / 100 })} />
+            <NumberField label="Loops" title="Extra repeats" precision={0} min={0} max={999} value={sound.loops ?? 0} onCommit={(loops) => set({ ...sound, loops })} />
+          </div>
+          {clip && (
+            <p className="hint flush">
+              {clip.duration.toFixed(2)}s ≈ {Math.ceil(clip.duration * fps)} frames at {fps} fps
+              {sound.sync === "stream" && props.duration < clip.duration * fps ? ` — the span is ${props.duration} frames, so it is cut short` : ""}
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }

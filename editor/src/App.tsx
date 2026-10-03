@@ -12,10 +12,14 @@ import {
   type LibraryItem,
   type Crumb,
   type SymbolKind,
+  type FontAsset,
+  type TextStyle,
   SYMBOL_KIND_ICON,
   SYMBOL_KIND_LABEL,
 } from "./engine";
 import { LibraryPanel } from "./components/LibraryPanel";
+import { AudioEngine } from "./audio";
+import { describeImport, importFonts } from "./assets";
 import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
 import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
 import { Timeline, type FrameOp, type OnionSettings } from "./components/Timeline";
@@ -68,6 +72,14 @@ function Editor({ engine }: { engine: Engine }) {
     stroke: { color: "#222222", width: 2, cap: "round", join: "round", dash: [] },
   });
   const [toolOptions, setToolOptions] = useState<ToolOptions>({ sides: 5, star: null, pencilSmooth: true });
+  const [textStyle, setTextStyle] = useState<TextStyle>({
+    font: null,
+    size: 32,
+    color: "#222222",
+    align: "left",
+    letterSpacing: 0,
+    lineHeight: 1.25,
+  });
   const [anchors, setAnchors] = useState<NodeRef[]>([]);
   const [frame, setFrameState] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -97,6 +109,7 @@ function Editor({ engine }: { engine: Engine }) {
   const [convert, setConvert] = useState<{ name: string; kind: SymbolKind } | null>(null);
   const history = useMemo<HistoryState>(() => JSON.parse(engine.historyJson()), [engine, version]);
   const stage = useMemo<StageInfo>(() => JSON.parse(engine.stageJson()), [engine, version]);
+  const fonts = useMemo<FontAsset[]>(() => JSON.parse(engine.fontsJson()), [engine, version]);
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
   const timelineLength = useMemo(() => engine.timelineLength(), [engine, version]);
@@ -115,6 +128,7 @@ function Editor({ engine }: { engine: Engine }) {
   // runtime player (movie clips keep their own clocks, buttons respond);
   // inside a symbol it steps that symbol's timeline.
   const [runtime, setRuntime] = useState(false);
+  const audio = useRef<AudioEngine | null>(null);
   useEffect(() => {
     if (!playing) return;
     const length = engine.timelineLength();
@@ -126,9 +140,11 @@ function Editor({ engine }: { engine: Engine }) {
       engine.playStart();
       setRuntime(true);
     }
-    const t0 = performance.now();
+    let t0 = 0;
     let done = 0;
     let raf = 0;
+    let cancelled = false;
+    const sound = useRuntime ? (audio.current ??= new AudioEngine(engine)) : null;
     const tick = (now: number) => {
       // rAF timestamps can precede t0 (they mark the frame's start): clamp.
       let due = Math.max(0, Math.floor(((now - t0) * fps) / 1000));
@@ -137,15 +153,30 @@ function Editor({ engine }: { engine: Engine }) {
       if (useRuntime) {
         setFrameState(engine.playTick(due - done));
         done = due;
+        sound?.sync(JSON.parse(engine.playAudioJson()));
       } else {
         goTo((start + due) % length);
       }
       if (atEnd) return setPlaying(false);
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
+    const begin = () => {
+      if (cancelled) return;
+      t0 = performance.now();
+      raf = requestAnimationFrame(tick);
+    };
+    // Decode the project's sounds first so the opening frames aren't silent.
+    if (sound) {
+      const ids = JSON.parse(engine.audioJson()).map((a: { id: number }) => a.id);
+      sound.preload(ids).then(begin, (e) => {
+        setMessage({ text: `Audio unavailable: ${errorText(e)}`, error: true });
+        begin();
+      });
+    } else begin();
     return () => {
+      cancelled = true;
       cancelAnimationFrame(raf);
+      sound?.stopAll();
       if (useRuntime) {
         goTo(engine.playStop());
         setRuntime(false);
@@ -313,6 +344,17 @@ function Editor({ engine }: { engine: Engine }) {
       setMessage({ text: `Import failed: ${errorText(e)}`, error: true });
     }
   }, [placeImages]);
+
+  const importFontDialog = useCallback(async () => {
+    try {
+      const r = await importFonts(engine);
+      if (r.ids.length) setTextStyle((s) => ({ ...s, font: r.ids[r.ids.length - 1] }));
+      if (r.ids.length || r.errors.length) setMessage(describeImport("font", r));
+    } catch (e) {
+      setMessage({ text: `Import failed: ${errorText(e)}`, error: true });
+    }
+    changed();
+  }, [engine, changed]);
 
   const onDropFiles = useCallback(
     async (files: File[], at: Pt) => placeImages(await Promise.all(files.map(fileToBinary)), at),
@@ -499,7 +541,12 @@ function Editor({ engine }: { engine: Engine }) {
             px
           </label>
         </div>
-        <ToolOptionsBar tool={tool} options={toolOptions} onOptions={setToolOptions} />
+        <ToolOptionsBar
+          tool={tool}
+          options={toolOptions}
+          onOptions={setToolOptions}
+          text={{ style: textStyle, onStyle: setTextStyle, fonts, onImportFont: importFontDialog }}
+        />
         <div className="group">
           <button onClick={() => zoomBy(0.8)} title="⌘−">−</button>
           <button className="zoom" onClick={() => zoomTo(1)} title="⌘1: 100%">
@@ -608,6 +655,7 @@ function Editor({ engine }: { engine: Engine }) {
           tool={tool}
           activeLayer={activeLayer}
           shapeStyle={shapeStyle}
+          textStyle={textStyle}
           settings={settings}
           view={view}
           onView={setView}
@@ -633,6 +681,8 @@ function Editor({ engine }: { engine: Engine }) {
               frameTarget={frameTarget ? { layer: frameTarget, frame: frameFocus!.frame } : null}
               library={library}
               onEditInstance={enterInstance}
+              onImportFont={importFontDialog}
+              onMessage={setMessage}
               run={run}
             />
           </div>

@@ -233,3 +233,23 @@ button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; width: 340px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
 .modal h3 { margin: 0; font-size: 14px; }
 .kind-choice { display: flex; gap: 10px; }
+
+/* Phase 6: text editing & sound */
+.viewport { position: relative; }
+.text-editor {
+  position: absolute;
+  z-index: 5;
+  min-width: 180px;
+  max-width: 420px;
+  font: 13px/1.35 var(--ui-font, system-ui), sans-serif;
+  background: #1d1d24ee;
+  color: #eee;
+  border: 1px solid #2f9bff;
+  border-radius: 4px;
+  padding: 4px 6px;
+  resize: both;
+  outline: none;
+}
+.seg { display: inline-flex; gap: 1px; }
+.timeline .sound-mark { fill: #7fd1ff; }
+.props .text-content { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; background: var(--field-bg, #1b1b22); color: inherit; border: 1px solid #3a3a48; border-radius: 3px; padding: 3px 5px; margin-bottom: 6px; }
