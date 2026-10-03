@@ -13,7 +13,7 @@
     "player": "vite build --config vite.player.config.ts --logLevel warn"
   },
   "dependencies": {
-    "@jitl/quickjs-singlefile-browser-release-sync": "0.32.0",
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@tauri-apps/api": "^2",
     "quickjs-emscripten-core": "0.32.0",
     "react": "^19",

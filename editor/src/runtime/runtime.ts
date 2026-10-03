@@ -20,6 +20,13 @@ export interface RuntimeOptions {
   onEnd?: () => void;
   /** Where keyboard events come from (default: window). */
   keyTarget?: EventTarget;
+  /** Seed for the scripts' Math.random (default: random). */
+  seed?: number;
+  /**
+   * Don't run on the wall clock: frames advance only via `advance(n)`.
+   * With a fixed seed this makes a session exactly replayable (parity tests).
+   */
+  manual?: boolean;
 }
 
 const isTyping = (t: EventTarget | null) =>
@@ -55,13 +62,14 @@ export class Runtime {
       rt.audio.preload(audioIds).catch((e) => opts.onOutput({ kind: "error", where: "audio", text: `audio unavailable: ${e}` })),
     ]);
     engine.playStart();
-    rt.scripts = new ScriptHost(qjs, engine, opts.onOutput);
+    const seed = opts.seed ?? crypto.getRandomValues(new Uint32Array(1))[0];
+    rt.scripts = new ScriptHost(qjs, engine, opts.onOutput, seed);
     rt.scripts.runDue();
     rt.syncAudio();
     rt.running = true;
     rt.attachKeys();
     rt.t0 = performance.now();
-    rt.raf = requestAnimationFrame(rt.loop);
+    if (!opts.manual) rt.raf = requestAnimationFrame(rt.loop);
     opts.onFrame(engine.playFrame());
     return rt;
   }
@@ -98,6 +106,23 @@ export class Runtime {
     this.scripts!.runDue();
     this.scripts!.dispatch({ type: "enterFrame" });
     this.syncAudio();
+  }
+
+  /** Manual mode: advance `n` frames now. */
+  advance(n: number) {
+    for (let i = 0; i < n && this.running; i++) this.step();
+    this.opts.onFrame(this.engine.playFrame());
+  }
+
+  /** Keyboard input from code (tests, on-screen controls). */
+  key(type: "keyDown" | "keyUp", key: string, code = key) {
+    this.scripts?.dispatch({ type, key, code });
+    this.opts.onFrame(this.engine.playFrame());
+  }
+
+  /** Fingerprint of the current picture and sound (see `Player::digest`). */
+  digest(): string {
+    return this.engine.playDigest();
   }
 
   private syncAudio() {

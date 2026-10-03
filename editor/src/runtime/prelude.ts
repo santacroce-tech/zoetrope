@@ -142,6 +142,17 @@ export const PRELUDE = String.raw`
     get isDown() { return mouse.isDown; },
   });
   var stageInfo = call({ op: "stageInfo" });
+
+  // Seeded per session (mulberry32), so a session can be replayed exactly
+  // (export parity checks); the host picks a random seed otherwise.
+  var seed = stageInfo.seed >>> 0;
+  Math.random = function () {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    var t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
   globalThis.stage = Object.freeze({
     width: stageInfo.width,
     height: stageInfo.height,

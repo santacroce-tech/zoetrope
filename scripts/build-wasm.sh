@@ -18,6 +18,11 @@ else
   DIR=debug
 fi
 
-wasm-bindgen --target web --out-dir "$OUT" \
+wasm-bindgen --target web $( [ "$PROFILE" = "release" ] && echo --remove-name-section ) --out-dir "$OUT" \
   "$ROOT/target/wasm32-unknown-unknown/$DIR/zoetrope_web.wasm"
+# Optional extra size pass when Binaryen is installed (brew install binaryen).
+if [ "$PROFILE" = "release" ] && command -v wasm-opt >/dev/null 2>&1; then
+  wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+    "$OUT/zoetrope_web_bg.wasm" -o "$OUT/zoetrope_web_bg.wasm"
+fi
 ls -l "$OUT"/zoetrope_web_bg.wasm

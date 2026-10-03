@@ -271,3 +271,14 @@ button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
 .script-badge { font-size: 10px; color: #ffd84d; margin-left: 4px; }
 .output-toggle.has-errors { color: #ff7b8a; border-color: #ff7b8a; }
 select.menu { font-weight: 500; width: auto; flex: none; }
+
+/* Phase 8: export */
+.modal.export-dialog { width: min(520px, 92vw); }
+.choice { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px 8px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.choice legend { color: var(--muted); font-size: 11px; padding: 0 4px; }
+.choice .check { align-items: flex-start; }
+.choice .check span { display: flex; flex-direction: column; }
+.choice small { color: var(--muted); font-size: 11px; }
+.embed { display: grid; grid-template-columns: 1fr auto; gap: 4px 6px; align-items: end; }
+.embed .field-label { grid-column: 1 / -1; }
+.embed textarea { font: 11px/1.4 ui-monospace, Menlo, monospace; resize: none; background: #15151b; color: #ddd; border: 1px solid #3a3a48; border-radius: 3px; padding: 4px 6px; }

@@ -32,6 +32,12 @@ impl AssetKind {
             AssetKind::Image { data, .. } | AssetKind::Font { data, .. } | AssetKind::Audio { data, .. } => data,
         }
     }
+
+    pub fn data_mut(&mut self) -> &mut Bytes {
+        match self {
+            AssetKind::Image { data, .. } | AssetKind::Font { data, .. } | AssetKind::Audio { data, .. } => data,
+        }
+    }
 }
 
 /// MIME type of a supported audio file, from its header.

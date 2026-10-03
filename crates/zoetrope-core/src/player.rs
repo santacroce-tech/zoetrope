@@ -648,6 +648,16 @@ impl Player {
     pub fn render(&self, p: &Project, opts: RenderOptions, r: &mut dyn Renderer) {
         render_with_clock(p, self.frame, opts, self, r);
     }
+
+    /// Fingerprint of what a viewer gets right now: the picture (as the
+    /// exported player draws it, at stage scale) and the stream sounds.
+    /// Two engines playing the same project the same way agree on it at
+    /// every tick (editor ↔ export parity checks).
+    pub fn digest(&self, p: &Project) -> u64 {
+        let mut r = crate::render::RecordingRenderer::default();
+        self.render(p, RenderOptions::player(Matrix::IDENTITY), &mut r);
+        self.streams.iter().fold(crate::render::digest(&r.ops), |h, c| h.rotate_left(7) ^ c.position.to_bits() ^ c.asset.0 as u64)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

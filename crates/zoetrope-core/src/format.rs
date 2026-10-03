@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const FORMAT_ID: &str = "zoetrope-project";
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// One migration step: upgrades a whole envelope from version N to N+1.
 /// It may assume `schemaVersion == N`; the runner rewrites the version field.
@@ -19,7 +19,7 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// `MIGRATIONS[i]` upgrades schema version `i + 1` to `i + 2`.
 /// Append here whenever `SCHEMA_VERSION` is bumped.
-const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
+const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6];
 
 /// v1 → v2 (Phase 3): strokes changed from `{ width, color }` to
 /// `{ width, paint, cap, join, miterLimit, … }`. Old strokes become solid
@@ -92,6 +92,12 @@ fn v4_to_v5(v: Value) -> Result<Value> {
     Ok(v)
 }
 
+/// v5 → v6 (Phase 8): optional export settings (`publish`). Nothing in
+/// older files changes.
+fn v5_to_v6(v: Value) -> Result<Value> {
+    Ok(v)
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Envelope<P> {
@@ -133,4 +139,65 @@ pub fn migrate(mut value: Value, steps: &[Migration], target: u32) -> Result<Val
         value["schemaVersion"] = Value::from(v + 1);
     }
     Ok(value)
+}
+
+// ------------------------------------------------------------------ pack
+
+/// First bytes of a `.zoepack`.
+pub const PACK_MAGIC: &[u8; 8] = b"ZOEPACK\x01";
+
+/// A project as one binary blob (the exported player's asset file, see
+/// docs/FORMAT.md, "Pack"): assets as raw bytes instead of base64.
+///
+/// Layout: `PACK_MAGIC`, header length (u32 LE), header (UTF-8 JSON: the
+/// usual envelope with every asset's `data` empty, plus `"blobs": [[asset
+/// id, offset, length], …]`), then the blob section (offsets are relative
+/// to its start). Compression is left to the transport (the exporter
+/// gzips the whole pack).
+pub fn save_pack(project: &Project) -> Vec<u8> {
+    let mut stripped = project.clone();
+    let mut blobs = Vec::new();
+    let mut body: Vec<u8> = Vec::new();
+    for a in &mut stripped.assets {
+        let data = std::mem::replace(a.kind.data_mut(), crate::asset::Bytes(std::sync::Arc::from([] as [u8; 0])));
+        blobs.push(serde_json::json!([a.id.0, body.len(), data.0.len()]));
+        body.extend_from_slice(&data.0);
+    }
+    let header = serde_json::json!({
+        "format": FORMAT_ID,
+        "schemaVersion": SCHEMA_VERSION,
+        "project": stripped,
+        "blobs": blobs,
+    });
+    let header = serde_json::to_vec(&header).expect("project serialization cannot fail");
+    let mut out = Vec::with_capacity(PACK_MAGIC.len() + 4 + header.len() + body.len());
+    out.extend_from_slice(PACK_MAGIC);
+    out.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Reads a pack written by `save_pack` (any schema version this build
+/// can migrate), with the same validation as `load_from_str`.
+pub fn load_pack(bytes: &[u8]) -> Result<Project> {
+    let bad = |m: &str| Error::Format(format!("not a valid Zoetrope pack: {m}"));
+    if bytes.len() < PACK_MAGIC.len() + 4 || &bytes[..PACK_MAGIC.len()] != PACK_MAGIC {
+        return Err(bad("wrong signature"));
+    }
+    let n = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let header = bytes.get(12..12 + n).ok_or_else(|| bad("truncated header"))?;
+    let body = &bytes[12 + n..];
+    let mut value: Value = serde_json::from_slice(header)?;
+    let blobs: Vec<(u32, usize, usize)> = serde_json::from_value(value.as_object_mut().and_then(|o| o.remove("blobs")).unwrap_or(Value::Array(vec![])))
+        .map_err(|e| bad(&format!("blob table: {e}")))?;
+    let value = migrate(value, MIGRATIONS, SCHEMA_VERSION)?;
+    let mut env: Envelope<Project> = serde_json::from_value(value)?;
+    for (id, offset, len) in blobs {
+        let data = offset.checked_add(len).and_then(|end| body.get(offset..end)).ok_or_else(|| bad("blob out of range"))?;
+        let asset = env.project.assets.iter_mut().find(|a| a.id.0 == id).ok_or_else(|| bad(&format!("blob for unknown asset {id}")))?;
+        *asset.kind.data_mut() = crate::asset::Bytes(std::sync::Arc::from(data));
+    }
+    env.project.validate()?;
+    Ok(env.project)
 }

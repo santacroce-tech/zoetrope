@@ -52,15 +52,80 @@ async fn save_project(app: AppHandle, contents: String, path: Option<String>) ->
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
-/// Asks where to save an exported HTML player and writes `contents` there.
-/// Returns the path written, or null if the user cancelled.
+/// Where the current export goes: chosen by the user in `export_begin`;
+/// `export_write` can only write there.
+#[derive(Default)]
+struct ExportTarget(Mutex<Option<ExportDest>>);
+
+enum ExportDest {
+    /// Single-file export: exactly this file.
+    File(PathBuf),
+    /// Folder export: plain file names inside this directory.
+    Folder(PathBuf),
+}
+
+/// Starts an export: asks for the destination (a `.html` file when
+/// `single`, else a folder). Returns the chosen path, or null if cancelled.
 #[tauri::command]
-async fn export_html(app: AppHandle, contents: String, name: String) -> Result<Option<String>, String> {
-    let picked = app.dialog().file().add_filter("Web page", &["html"]).set_file_name(name).blocking_save_file();
-    let Some(fp) = picked else { return Ok(None) };
-    let path = to_path(fp)?;
-    write_atomic(&path, &contents)?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+async fn export_begin(app: AppHandle, single: bool, name: String, target: State<'_, ExportTarget>) -> Result<Option<String>, String> {
+    let dest = if single {
+        let picked = app.dialog().file().add_filter("Web page", &["html"]).set_file_name(name).blocking_save_file();
+        match picked {
+            Some(fp) => ExportDest::File(to_path(fp)?),
+            None => return Ok(None),
+        }
+    } else {
+        match app.dialog().file().set_title("Export into folder").blocking_pick_folder() {
+            Some(fp) => ExportDest::Folder(to_path(fp)?),
+            None => return Ok(None),
+        }
+    };
+    let shown = match &dest {
+        ExportDest::File(p) | ExportDest::Folder(p) => p.to_string_lossy().into_owned(),
+    };
+    *target.0.lock().unwrap() = Some(dest);
+    Ok(Some(shown))
+}
+
+/// Writes one export file. The body is the raw bytes; the `x-file-name`
+/// header names it (a plain name: no directories). Single-file exports
+/// write their one file to the chosen path.
+#[tauri::command]
+fn export_write(request: tauri::ipc::Request<'_>, target: State<'_, ExportTarget>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("export_write expects raw bytes".into()) };
+    let name = request.headers().get("x-file-name").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let name = percent_decode(name);
+    if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+        return Err(format!("bad export file name {name:?}"));
+    }
+    let guard = target.0.lock().unwrap();
+    let path = match guard.as_ref() {
+        Some(ExportDest::File(p)) => p.clone(),
+        Some(ExportDest::Folder(dir)) => dir.join(&name),
+        None => return Err("no export in progress".into()),
+    };
+    let tmp = path.with_extension("export.tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("could not replace {}: {e}", path.display()))
+}
+
+/// Header values are ASCII; the frontend percent-encodes file names.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Shows an open dialog and returns the chosen file, or null if cancelled.
@@ -123,7 +188,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(PickedFiles::default())
-        .invoke_handler(tauri::generate_handler![save_project, open_project, export_html, pick_files, read_picked_file])
+        .manage(ExportTarget::default())
+        .invoke_handler(tauri::generate_handler![save_project, open_project, export_begin, export_write, pick_files, read_picked_file])
         .run(tauri::generate_context!())
         .expect("error while running Zoetrope");
 }

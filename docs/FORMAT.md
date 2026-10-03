@@ -1,4 +1,4 @@
-# Project file format (`.zoe`) — schema version 5
+# Project file format (`.zoe`) — schema version 6
 
 UTF-8 JSON. Field names are camelCase. Unknown fields are ignored on read.
 Fields marked *optional* may be omitted and take the listed default; the
@@ -25,6 +25,8 @@ History:
   "newer version" error rather than an "unknown variant" error.
 * **v5** (Phase 7). Adds frame labels, frame scripts and symbol scripts. These
   are optional fields, so `v4_to_v5` changes only the version.
+* **v6** (Phase 8). Adds the optional `publish` block (export settings);
+  `v5_to_v6` changes only the version.
 
 ## Envelope
 
@@ -61,6 +63,12 @@ test that loads a fixture of the old version. Purely additive optional fields
 | `root` | id | Symbol used as the main timeline. |
 | `symbols` | Symbol[] | Symbol definitions. |
 | `assets` | Asset[] | *optional*, default `[]`. Embedded binary assets. |
+| `publish` | Publish | *optional*: export settings (absent means all defaults). |
+
+**Publish**: `title` (*optional* string, default `""`, meaning the file name),
+`scale` (`"letterbox"` default \| `"fill"` \| `"fixed"`), `mode`
+(`"singleFile"` default \| `"folder"`), `pageColor` (Color, default
+`#111111`), `startOnClick` (bool, default `false`). See EXPORT.md.
 
 **Stage**: `width`, `height` (stage px, in (0, 16384]), `background` (Color), `fps` (in (0, 240]).
 
@@ -337,7 +345,20 @@ itself, directly or transitively.
 Floats round-trip exactly (`serde_json` with `float_roundtrip`), so save →
 load → save is byte-stable.
 
-## Planned changes
+## Pack
 
-Export options (Phase 8) may add a player settings block (scaling mode,
-autoplay), as optional fields.
+A `.zoepack` is the same project in a binary container. It is used by the
+exported player, gzipped, and holds assets as raw bytes instead of base64
+(`format::save_pack` / `load_pack`):
+
+| Bytes | Content |
+|-------|---------|
+| 0–7 | `ZOEPACK` followed by byte `0x01` |
+| 8–11 | header length *N*, u32 little-endian |
+| 12 … 12+*N* | header: UTF-8 JSON. It is the usual envelope (`format`, `schemaVersion`, `project`) with every asset's `data` set to `""`, plus `"blobs": [[assetId, offset, length], …]`. |
+| rest | blob section; offsets are relative to its start |
+
+Loading migrates the header like a `.zoe` file, puts the blobs back into
+their assets, and then runs the same validation. A pack with a bad signature,
+truncated header, bad JSON or an out-of-range blob is rejected. Compression
+is the transport's job: exports gzip the whole pack.
