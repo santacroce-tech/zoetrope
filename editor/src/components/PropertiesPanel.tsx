@@ -1,6 +1,18 @@
 import { useState } from "react";
-import { BLEND_MODES, type BlendMode, type ElementInfo, type Engine, type LayerNode, type StageInfo } from "../engine";
+import {
+  BLEND_MODES,
+  type BlendMode,
+  type ElementInfo,
+  type Engine,
+  type GradientStop,
+  type LayerNode,
+  type Paint,
+  type PaintStyle,
+  type StageInfo,
+  type StrokeData,
+} from "../engine";
 import { ColorField, NumberField } from "./fields";
+import { GradientEditor } from "./GradientEditor";
 
 interface Props {
   engine: Engine;
@@ -35,7 +47,7 @@ function kindLabel(info: ElementInfo): string {
   const e = info.element;
   if (e.type === "bitmap") return `Bitmap — ${info.sourceName ?? "?"}`;
   if (e.type === "instance") return `Instance of ${info.sourceName ?? "?"}`;
-  return { rect: "Rectangle", ellipse: "Ellipse", line: "Line" }[e.geometry!.kind];
+  return { rect: "Rectangle", ellipse: "Ellipse", line: "Line", path: "Path" }[e.geometry!.kind];
 }
 
 export function PropertiesPanel({ engine, selection, stage, layers, run }: Props) {
@@ -156,38 +168,7 @@ export function PropertiesPanel({ engine, selection, stage, layers, run }: Props
       </section>
 
       {allShapes && (
-        <section>
-          <h4>Fill &amp; stroke</h4>
-          {closedShapes && (
-            <div className="row">
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={!!e.fill}
-                  onChange={(ev) => patch({ fill: ev.target.checked ? { type: "solid", color: "#888888" } : null })}
-                />
-                Fill
-              </label>
-              {e.fill && <ColorField value={e.fill.color} onCommit={(color) => patch({ fill: { type: "solid", color } })} />}
-            </div>
-          )}
-          <div className="row">
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={!!e.stroke}
-                onChange={(ev) => patch({ stroke: ev.target.checked ? { width: 1, color: "#000000" } : null })}
-              />
-              Stroke
-            </label>
-            {e.stroke && (
-              <>
-                <ColorField value={e.stroke.color} onCommit={(color) => patch({ stroke: { ...e.stroke!, color } })} />
-                <NumberField label="" suffix="px" min={0} value={e.stroke.width} onCommit={(width) => patch({ stroke: { ...e.stroke!, width } })} />
-              </>
-            )}
-          </div>
-        </section>
+        <FillStrokeSection engine={engine} infos={infos} closedShapes={closedShapes} run={run} />
       )}
 
       <section>
@@ -291,5 +272,160 @@ function StagePanel({ engine, stage, run }: { engine: Engine; stage: StageInfo; 
         edges to skew, and the white dot to move the pivot.
       </p>
     </div>
+  );
+}
+
+type PaintKind = "none" | "solid" | "linear" | "radial";
+
+function paintColor(p: Paint | undefined, fallback: string): string {
+  if (!p) return fallback;
+  return p.type === "solid" ? p.color : (p.stops[0]?.color ?? fallback);
+}
+
+function styleFor(kind: PaintKind, current: Paint | undefined, fallback: string): PaintStyle | null {
+  if (kind === "none") return null;
+  const color = paintColor(current, fallback);
+  if (kind === "solid") return { type: "solid", color };
+  const stops: GradientStop[] =
+    current && current.type !== "solid" ? current.stops : [{ offset: 0, color }, { offset: 1, color: "#ffffff" }];
+  return { type: kind, stops };
+}
+
+const DASH_PRESETS: Record<string, number[]> = { solid: [], dashed: [8, 4], dotted: [0.01, 4], "dash-dot": [10, 4, 0.01, 4] };
+
+function FillStrokeSection(props: { engine: Engine; infos: ElementInfo[]; closedShapes: boolean; run: Props["run"] }) {
+  const { engine, infos, closedShapes, run } = props;
+  const ids = JSON.stringify(infos.map((i) => i.element.id));
+  const single = infos.length === 1;
+  const e = infos[0].element;
+  const fill = e.fill;
+  const stroke = e.stroke as StrokeData | undefined;
+  const patch = (p: object) => run(() => engine.patchElements(ids, JSON.stringify(p)));
+  const setStyle = (part: "fill" | "stroke", style: PaintStyle | null) =>
+    run(() => engine.setPaintStyle(ids, part, JSON.stringify(style)));
+  const anyPrimitive = infos.some((i) => i.element.geometry?.kind !== "path");
+
+  /** Gradient stops: a single shape keeps its gradient geometry; several are re-fitted. */
+  const setStops = (part: "fill" | "stroke", paint: Paint, stops: GradientStop[]) => {
+    if (paint.type === "solid") return;
+    if (!single) return setStyle(part, { type: paint.type, stops });
+    if (part === "fill") patch({ fill: { ...paint, stops } });
+    else patch({ stroke: { paint: { ...paint, stops } } });
+  };
+
+  const dashName = Object.entries(DASH_PRESETS).find(([, d]) => JSON.stringify(d) === JSON.stringify(stroke?.dash ?? []))?.[0] ?? "custom";
+
+  return (
+    <section>
+      <h4>
+        Fill &amp; stroke
+        {anyPrimitive && (
+          <button className="mini" title="Convert to editable path (⌘B)" onClick={() => run(() => engine.convertToPath(ids))}>
+            to path
+          </button>
+        )}
+      </h4>
+      {closedShapes && (
+        <>
+          <div className="row">
+            <span className="field-label">Fill</span>
+            <select value={fill?.type ?? "none"} onChange={(ev) => setStyle("fill", styleFor(ev.target.value as PaintKind, fill, "#888888"))}>
+              <option value="none">None</option>
+              <option value="solid">Solid</option>
+              <option value="linear">Linear gradient</option>
+              <option value="radial">Radial gradient</option>
+            </select>
+            {fill?.type === "solid" && (
+              <ColorField value={fill.color} onCommit={(color) => (single ? patch({ fill: { type: "solid", color } }) : setStyle("fill", { type: "solid", color }))} />
+            )}
+          </div>
+          {fill && fill.type !== "solid" && (
+            <GradientEditor kind={fill.type} stops={fill.stops} onChange={(stops) => setStops("fill", fill, stops)} />
+          )}
+          <div className="row">
+            <span className="field-label">Rule</span>
+            <select value={e.fillRule ?? "nonZero"} onChange={(ev) => patch({ fillRule: ev.target.value })} title="How overlapping/self-intersecting areas are filled">
+              <option value="nonZero">Non-zero</option>
+              <option value="evenOdd">Even-odd</option>
+            </select>
+          </div>
+        </>
+      )}
+      <div className="row">
+        <span className="field-label">Stroke</span>
+        <select value={stroke?.paint.type ?? "none"} onChange={(ev) => setStyle("stroke", styleFor(ev.target.value as PaintKind, stroke?.paint, "#000000"))}>
+          <option value="none">None</option>
+          <option value="solid">Solid</option>
+          <option value="linear">Linear gradient</option>
+          <option value="radial">Radial gradient</option>
+        </select>
+        {stroke?.paint.type === "solid" && (
+          <ColorField value={stroke.paint.color} onCommit={(color) => patch({ stroke: { paint: { type: "solid", color } } })} />
+        )}
+      </div>
+      {stroke && stroke.paint.type !== "solid" && (
+        <GradientEditor kind={stroke.paint.type} stops={stroke.paint.stops} onChange={(stops) => setStops("stroke", stroke.paint, stops)} />
+      )}
+      {stroke && (
+        <div className="grid2 stroke-grid">
+          <NumberField label="Width" suffix="px" min={0} value={stroke.width} onCommit={(width) => patch({ stroke: { width } })} />
+          <label className="field">
+            <span className="field-label">Dash</span>
+            <select
+              value={dashName}
+              onChange={(ev) => ev.target.value !== "custom" && patch({ stroke: { dash: DASH_PRESETS[ev.target.value] } })}
+            >
+              {Object.keys(DASH_PRESETS).map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+              {dashName === "custom" && <option value="custom">custom</option>}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Cap</span>
+            <select value={stroke.cap} onChange={(ev) => patch({ stroke: { cap: ev.target.value } })}>
+              <option value="butt">Butt</option>
+              <option value="round">Round</option>
+              <option value="square">Square</option>
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Join</span>
+            <select value={stroke.join} onChange={(ev) => patch({ stroke: { join: ev.target.value } })}>
+              <option value="miter">Miter</option>
+              <option value="round">Round</option>
+              <option value="bevel">Bevel</option>
+            </select>
+          </label>
+          <label className="field wide" title="Dash and gap lengths, e.g. 8, 4">
+            <span className="field-label">Pattern</span>
+            <input
+              key={JSON.stringify(stroke.dash ?? [])}
+              type="text"
+              defaultValue={(stroke.dash ?? []).join(", ")}
+              placeholder="solid"
+              onBlur={(ev) => {
+                const dash = ev.target.value
+                  .split(/[\s,]+/)
+                  .filter(Boolean)
+                  .map(Number);
+                if (dash.every((d) => Number.isFinite(d) && d >= 0) && JSON.stringify(dash) !== JSON.stringify(stroke.dash ?? [])) {
+                  patch({ stroke: { dash } });
+                }
+              }}
+              onKeyDown={(ev) => ev.key === "Enter" && (ev.target as HTMLInputElement).blur()}
+            />
+          </label>
+          {stroke.join === "miter" && (
+            <NumberField label="Miter" min={1} max={100} value={stroke.miterLimit} onCommit={(miterLimit) => patch({ stroke: { miterLimit } })} />
+          )}
+          {(stroke.dash?.length ?? 0) > 0 && (
+            <NumberField label="Offset" value={stroke.dashOffset ?? 0} onCommit={(dashOffset) => patch({ stroke: { dashOffset } })} />
+          )}
+        </div>
+      )}
+    </section>
   );
 }

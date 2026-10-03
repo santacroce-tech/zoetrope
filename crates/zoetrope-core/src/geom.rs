@@ -27,7 +27,7 @@ const KAPPA: f64 = 0.552_284_749_830_793_4;
 const CURVE_STEPS: usize = 24;
 
 /// A flattened subpath.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Polyline {
     pub points: Vec<Point>,
     pub closed: bool,
@@ -151,6 +151,11 @@ impl Path {
     /// Nonzero-winding containment, treating every subpath as closed
     /// (matching how Canvas2D/SVG fill open subpaths).
     pub fn contains(&self, p: Point) -> bool {
+        self.contains_with(p, crate::paint::FillRule::NonZero)
+    }
+
+    /// Containment under a fill rule.
+    pub fn contains_with(&self, p: Point, rule: crate::paint::FillRule) -> bool {
         let mut winding = 0i32;
         for pl in self.flatten() {
             let pts = &pl.points;
@@ -165,7 +170,10 @@ impl Path {
                 }
             }
         }
-        winding != 0
+        match rule {
+            crate::paint::FillRule::NonZero => winding != 0,
+            crate::paint::FillRule::EvenOdd => winding % 2 != 0,
+        }
     }
 
     /// Shortest distance from `p` to the path outline.

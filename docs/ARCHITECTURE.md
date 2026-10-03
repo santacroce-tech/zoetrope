@@ -35,8 +35,10 @@ with a minimal JS bootstrap instead of the React editor.
 | `history`  | `Document` = project + undo/redo. `execute(label, edits)` is atomic (it rolls back on failure). Dirty tracking uses state ids. |
 | `ops`      | High-level commands that build `Edit`s: move, duplicate, delete, patch properties, resize, create shapes, import images, align/distribute, arrange, layer add/delete/move/props, stage. The UI only calls these. |
 | `query`    | Tight bounds, hit-testing (fill containment, stroke distance, recursion into instances; hidden and locked layers are skipped), marquee, selection handle geometry. |
-| `interact` | Direct-manipulation math: `TransformSession` (move/scale/rotate/skew/pivot drags with modifiers), snapping (grid, objects, stage), shape-tool drags. |
-| `geom`     | `Path` (move/line/quad/cubic/close), deterministic flattening, containment, outline distance, `Rect`. |
+| `interact` | Direct-manipulation math: `TransformSession` (move/scale/rotate/skew/pivot drags with modifiers), `EditSession` (anchor/handle/gradient drags), `PenSession` (the pen tool's state machine), snapping (grid, objects, stage), shape-tool drags (incl. polygon/star). |
+| `vector`   | Editable `VectorPath` (subpaths of anchors with bezier handles): primitive→path conversion, split/insert, delete, convert corner⇄smooth, handle constraints, nearest-point, freehand fitting (RDP simplification + Catmull-Rom smoothing), polystar. |
+| `paint`    | `Paint` (solid, linear, radial with focal point), `PaintStyle` (geometry-free tool form, fitted to shapes), `Stroke` (caps, joins, miter, dashes), `FillRule`. |
+| `geom`     | `Path` (move/line/quad/cubic/close), deterministic flattening, containment (non-zero / even-odd), outline distance, `Rect`. |
 | `render`   | `Renderer` trait, `render_frame` tree walk, `RecordingRenderer` (tests/determinism), `NullRenderer` (profiling). |
 | `asset`    | Embedded assets: base64 (de)serialization and PNG/JPEG/GIF header sniffing, so the core is the authority on image size. |
 | `format`   | Versioned JSON envelope, migration chain, validation. See FORMAT.md. |
@@ -61,8 +63,11 @@ when `opts.show_guides`) → elements (back→front). It composes
 The `Renderer` trait has seven methods: `begin_frame`, `fill_path`,
 `stroke_path`, `draw_image`, `begin_group`, `end_group`, `end_frame`.
 
-* Vector colors arrive **final**: the core applies the composed color
-  transform (tint, then opacity, child first) before calling the backend.
+* Paints arrive **final**: the core applies the composed color transform
+  (tint, then opacity, child first) to solid colors and to every gradient
+  stop before calling the backend. Gradient geometry, stroke widths and
+  dashes are in path coordinates, so they follow the `transform` the backend
+  is given. `fill_path` also receives the fill rule.
 * Images receive the `ColorTransform` because only the backend can recolor
   pixels. In Phase 2 its RGB multipliers are always uniform (tint + alpha
   form). The Canvas2D backend implements tint with a `source-atop` fill and
@@ -99,6 +104,16 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
   document unchanged.
 * **Drags**: `beginTransform(ids, mode, x, y)` → `updateTransform(x, y, mods,
   snap)` (returns snap guides) → `endTransform()` or `cancelTransform()`.
+  Path and gradient drags follow the same pattern with
+  `beginEdit(id, target)` / `updateEdit` / `endEdit` / `cancelEdit`.
+* **Pen**: `penDown` / `penDrag` / `penUp` / `penHover` feed the core's pen
+  state machine. `penPreviewJson` returns what to draw, and `penFinish`
+  creates the path. **Pencil**: the UI collects raw pointer samples and
+  `createFreehand` fits them.
+* **Vector queries**: `pathInfoJson` (anchors/handles/outline in stage
+  coordinates), `pathHitJson`, `gradientJson`, `pickStyle` (eyedropper).
+  Previews such as `shapePreview` return stage-space polylines, so the UI never
+  evaluates curves itself.
 * **Rendering**: `render(ctx, frame, scale, offsetX, offsetY, clip,
   showGuides)` draws via Canvas2D. `decodeImages()` resolves once newly
   embedded images are decoded (the caller then redraws). Undecodable images
@@ -135,5 +150,6 @@ wasm-bindgen --target web --out-dir editor/src/wasm/pkg target/wasm32-unknown-un
 
 This is wrapped in `scripts/build-wasm.sh` (`npm run wasm`), which `tauri dev`
 and `tauri build` run automatically. The `wasm-bindgen` crate is pinned
-(`=0.2.126`) and must match the CLI version. The module is ~700 KB unoptimized
-(~230 KB gzipped). A `wasm-opt` size pass is planned for the export phase.
+(`=0.2.126`) and must match the CLI version. The module was ~700 KB unoptimized
+(~230 KB gzipped) in Phase 2 and ~1 MB after Phase 3. A size pass
+(`wasm-opt`, `opt-level = "s"`) is planned for the export phase.

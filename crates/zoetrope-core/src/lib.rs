@@ -16,8 +16,10 @@ pub mod math;
 pub mod model;
 pub mod ops;
 pub mod outline;
+pub mod paint;
 pub mod query;
 pub mod render;
+pub mod vector;
 
 pub use color::{Color, ColorTransform};
 pub use error::{Error, Result};

@@ -19,11 +19,16 @@ use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, ImageBitmap};
 use zoetrope_core::asset::AssetKind;
 use zoetrope_core::geom::Rect;
-use zoetrope_core::interact::{shape_from_drag, snap_point, DragMode, Modifiers, ShapeTool, SnapConfig, SnapTargets, TransformSession};
+use zoetrope_core::interact::{
+    gradient_controls, path_hit, path_info, shape_from_drag, snap_point, DragMode, EditSession, EditTarget, Modifiers, PaintPart, PenSession,
+    ShapeOptions, ShapeTool, SnapConfig, SnapTargets, TransformSession,
+};
 use zoetrope_core::ops::{self, Align, Arrange, Distribute, LayerPatch, ShapeStyle};
 use zoetrope_core::query::{self, Scope};
 use zoetrope_core::render::{render_frame, RenderOptions};
-use zoetrope_core::{demo, format, outline, AssetId, Document, ElementId, Error, LayerId, LayerKind, Matrix, Point, Project, Stage};
+use zoetrope_core::{
+    demo, format, outline, AssetId, Document, ElementId, Error, LayerId, LayerKind, Matrix, NodeRef, PaintStyle, Point, Project, Stage,
+};
 
 #[derive(Default)]
 struct ImageCache {
@@ -35,6 +40,8 @@ struct ImageCache {
 pub struct Engine {
     doc: Document,
     session: Option<TransformSession>,
+    edit: Option<EditSession>,
+    pen: Option<PenSession>,
     images: Rc<RefCell<ImageCache>>,
     /// Bumped when the document is replaced, so in-flight decodes for the
     /// old document are discarded.
@@ -66,6 +73,8 @@ impl Engine {
         Engine {
             doc: Document::new(demo::demo_project()),
             session: None,
+            edit: None,
+            pen: None,
             images: Rc::default(),
             generation: Rc::default(),
             pool: RefCell::default(),
@@ -75,6 +84,8 @@ impl Engine {
     fn replace_document(&mut self, project: Project) {
         self.doc = Document::new(project);
         self.session = None;
+        self.edit = None;
+        self.pen = None;
         *self.images.borrow_mut() = ImageCache::default();
         self.generation.set(self.generation.get() + 1);
     }
@@ -294,23 +305,186 @@ impl Engine {
         Ok(serde_json::json!({ "x": p.x, "y": p.y, "guides": guides }).to_string())
     }
 
-    /// The shape a drawing-tool drag would create (for the live preview), or `null`.
+    /// Outline (stage-space polylines) of the shape a drawing-tool drag
+    /// would create, for the live preview; `null` if too small.
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = shapePreview)]
-    pub fn shape_preview(&self, tool: &str, x0: f64, y0: f64, x1: f64, y1: f64, mods_json: &str) -> Result<String, JsError> {
+    pub fn shape_preview(&self, tool: &str, x0: f64, y0: f64, x1: f64, y1: f64, mods_json: &str, opts_json: &str) -> Result<String, JsError> {
         let tool: ShapeTool = parse("tool", &format!("{tool:?}"))?;
         let mods: Modifiers = parse("modifiers", mods_json)?;
-        Ok(to_json(&shape_from_drag(tool, Point::new(x0, y0), Point::new(x1, y1), mods)))
+        let opts: ShapeOptions = parse("shape options", opts_json)?;
+        Ok(to_json(&shape_from_drag(tool, Point::new(x0, y0), Point::new(x1, y1), mods, &opts).map(|d| d.outline())))
+    }
+
+    // ----- pen tool (stage coordinates) -----
+
+    /// Pen click. Returns true if it closed the path (finish on pointer-up).
+    #[wasm_bindgen(js_name = penDown)]
+    pub fn pen_down(&mut self, x: f64, y: f64, mods_json: &str, close_tolerance: f64) -> Result<bool, JsError> {
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        Ok(self.pen.get_or_insert_with(PenSession::default).pointer_down(Point::new(x, y), mods, close_tolerance))
+    }
+
+    #[wasm_bindgen(js_name = penDrag)]
+    pub fn pen_drag(&mut self, x: f64, y: f64, mods_json: &str) -> Result<(), JsError> {
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        if let Some(p) = &mut self.pen {
+            p.pointer_drag(Point::new(x, y), mods);
+        }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = penUp)]
+    pub fn pen_up(&mut self) {
+        if let Some(p) = &mut self.pen {
+            p.pointer_up();
+        }
+    }
+
+    #[wasm_bindgen(js_name = penHover)]
+    pub fn pen_hover(&mut self, x: f64, y: f64, mods_json: &str) -> Result<(), JsError> {
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        if let Some(p) = &mut self.pen {
+            p.hover(Point::new(x, y), mods);
+        }
+        Ok(())
+    }
+
+    /// `{ outline, anchors, handles, canClose }` or `null` when no pen path is in progress.
+    #[wasm_bindgen(js_name = penPreviewJson)]
+    pub fn pen_preview_json(&self, close_tolerance: f64) -> String {
+        to_json(&self.pen.as_ref().map(|p| p.preview(close_tolerance)))
+    }
+
+    /// Ends the pen path and creates it on `layer`. Returns the new id, or
+    /// `undefined` if there were fewer than two anchors.
+    #[wasm_bindgen(js_name = penFinish)]
+    pub fn pen_finish(&mut self, layer: u32, style_json: &str) -> Result<Option<u32>, JsError> {
+        let style: ShapeStyle = parse("style", style_json)?;
+        let Some(path) = self.pen.take().and_then(PenSession::finish) else { return Ok(None) };
+        ops::create_path(&mut self.doc, LayerId(layer), path, &style, "Pen").map(|e| Some(e.0)).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = penCancel)]
+    pub fn pen_cancel(&mut self) {
+        self.pen = None;
+    }
+
+    // ----- pencil -----
+
+    /// Creates a path from freehand samples (JSON `[{x, y}, …]`, stage coords).
+    #[wasm_bindgen(js_name = createFreehand)]
+    pub fn create_freehand(&mut self, layer: u32, points_json: &str, smooth: bool, tolerance: f64, style_json: &str) -> Result<Option<u32>, JsError> {
+        let points: Vec<Point> = parse("points", points_json)?;
+        let style: ShapeStyle = parse("style", style_json)?;
+        ops::create_freehand(&mut self.doc, LayerId(layer), &points, smooth, tolerance, &style).map(|e| e.map(|e| e.0)).map_err(js_err)
+    }
+
+    // ----- subselection & gradient editing -----
+
+    /// Anchors/handles/outline of a shape in stage coordinates, or `null`.
+    #[wasm_bindgen(js_name = pathInfoJson)]
+    pub fn path_info_json(&self, id: u32) -> String {
+        to_json(&path_info(&self.doc.project, &self.scope(), ElementId(id)))
+    }
+
+    /// Nearest outline position `{ subpath, segment, t, distance }` within `tolerance`, or `null`.
+    #[wasm_bindgen(js_name = pathHitJson)]
+    pub fn path_hit_json(&self, id: u32, x: f64, y: f64, tolerance: f64) -> String {
+        to_json(&path_hit(&self.doc.project, &self.scope(), ElementId(id), Point::new(x, y), tolerance))
+    }
+
+    /// Gradient controls of a shape's `part` ("fill" | "stroke") in stage coordinates, or `null`.
+    #[wasm_bindgen(js_name = gradientJson)]
+    pub fn gradient_json(&self, id: u32, part: &str) -> Result<String, JsError> {
+        let part: PaintPart = parse("paint part", &format!("{part:?}"))?;
+        Ok(to_json(&gradient_controls(&self.doc.project, &self.scope(), ElementId(id), part)))
+    }
+
+    /// Starts an anchor/handle/gradient drag. `target_json`:
+    /// `{"target":"anchors","nodes":[…]}`, `{"target":"handle","node":{…},"side":"in"}`,
+    /// `{"target":"gradient","part":"fill","handle":"start"}`.
+    #[wasm_bindgen(js_name = beginEdit)]
+    pub fn begin_edit(&mut self, id: u32, target_json: &str, x: f64, y: f64) -> Result<(), JsError> {
+        let target: EditTarget = parse("edit target", target_json)?;
+        self.cancel_edit();
+        self.edit = Some(EditSession::begin(&self.doc.project, self.scope(), ElementId(id), target, Point::new(x, y)).map_err(js_err)?);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = updateEdit)]
+    pub fn update_edit(&mut self, x: f64, y: f64, mods_json: &str) -> Result<(), JsError> {
+        let mods: Modifiers = parse("modifiers", mods_json)?;
+        let s = self.edit.as_ref().ok_or_else(|| JsError::new("no edit in progress"))?;
+        s.update(&mut self.doc.project, Point::new(x, y), mods).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = endEdit)]
+    pub fn end_edit(&mut self) -> Result<(), JsError> {
+        match self.edit.take() {
+            Some(s) => s.commit(&mut self.doc).map_err(js_err),
+            None => Ok(()),
+        }
+    }
+
+    #[wasm_bindgen(js_name = cancelEdit)]
+    pub fn cancel_edit(&mut self) {
+        if let Some(s) = self.edit.take() {
+            s.cancel(&mut self.doc.project);
+        }
+    }
+
+    /// Splits a segment, returning the new anchor `{ subpath, node }` (JSON).
+    #[wasm_bindgen(js_name = insertAnchor)]
+    pub fn insert_anchor(&mut self, id: u32, subpath: usize, segment: usize, t: f64) -> Result<String, JsError> {
+        ops::insert_anchor(&mut self.doc, ElementId(id), subpath, segment, t).map(|r| to_json(&r)).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = deleteAnchors)]
+    pub fn delete_anchors(&mut self, id: u32, nodes_json: &str) -> Result<(), JsError> {
+        let nodes: Vec<NodeRef> = parse("anchors", nodes_json)?;
+        ops::delete_anchors(&mut self.doc, ElementId(id), &nodes).map_err(js_err)
+    }
+
+    /// Toggles an anchor between corner and smooth.
+    #[wasm_bindgen(js_name = convertAnchor)]
+    pub fn convert_anchor(&mut self, id: u32, subpath: usize, node: usize) -> Result<(), JsError> {
+        ops::convert_anchor(&mut self.doc, ElementId(id), NodeRef { subpath, node }).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = convertToPath)]
+    pub fn convert_to_path(&mut self, ids_json: &str) -> Result<(), JsError> {
+        ops::convert_to_path(&mut self.doc, &ids(ids_json)?).map_err(js_err)
+    }
+
+    // ----- paint -----
+
+    /// Eyedropper: `{ part, fill, stroke }` styles of the shape under the point, or `null`.
+    #[wasm_bindgen(js_name = pickStyle)]
+    pub fn pick_style(&self, x: f64, y: f64, tolerance: f64) -> String {
+        to_json(&ops::pick_style(&self.doc.project, &self.scope(), Point::new(x, y), tolerance))
+    }
+
+    /// Paint bucket / panel: sets `part` ("fill" | "stroke") of shapes from a
+    /// geometry-free style (`null` removes it); gradients fit each shape.
+    #[wasm_bindgen(js_name = setPaintStyle)]
+    pub fn set_paint_style(&mut self, ids_json: &str, part: &str, style_json: &str) -> Result<(), JsError> {
+        let part: PaintPart = parse("paint part", &format!("{part:?}"))?;
+        let style: Option<PaintStyle> = parse("paint style", style_json)?;
+        ops::set_paint_style(&mut self.doc, &ids(ids_json)?, part, style.as_ref()).map_err(js_err)
     }
 
     // ----- commands -----
 
     pub fn undo(&mut self) -> Result<bool, JsError> {
         self.cancel_transform();
+        self.cancel_edit();
         self.doc.undo().map_err(js_err)
     }
 
     pub fn redo(&mut self) -> Result<bool, JsError> {
         self.cancel_transform();
+        self.cancel_edit();
         self.doc.redo().map_err(js_err)
     }
 
@@ -327,12 +501,14 @@ impl Engine {
         x1: f64,
         y1: f64,
         mods_json: &str,
+        opts_json: &str,
         style_json: &str,
     ) -> Result<Option<u32>, JsError> {
         let tool: ShapeTool = parse("tool", &format!("{tool:?}"))?;
         let mods: Modifiers = parse("modifiers", mods_json)?;
+        let opts: ShapeOptions = parse("shape options", opts_json)?;
         let style: ShapeStyle = parse("style", style_json)?;
-        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, Point::new(x0, y0), Point::new(x1, y1), mods, &style)
+        let id = ops::create_shape(&mut self.doc, LayerId(layer), tool, Point::new(x0, y0), Point::new(x1, y1), mods, &opts, &style)
             .map_err(js_err)?;
         Ok(id.map(|e| e.0))
     }

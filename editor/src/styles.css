@@ -68,12 +68,25 @@ input[type="color"].swatch:disabled { opacity: 0.3; }
   display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
   background: var(--panel); border-right: 1px solid var(--border);
 }
-.tools > button { width: 36px; height: 32px; font-size: 15px; padding: 0; }
+.tools { overflow-y: auto; }
+.tools > button { width: 36px; height: 28px; font-size: 14px; padding: 0; flex: none; }
 .tools > button.active { background: #3d2a37; border-color: var(--accent); }
 .tool-sep { width: 32px; border-top: 1px solid var(--border); margin: 6px 0; }
 .style-swatch { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-bottom: 4px; }
 .style-label { font-size: 9px; color: var(--muted); text-transform: uppercase; }
-.style-swatch .none { padding: 0 4px; font-size: 10px; line-height: 14px; }
+.paint-preview { width: 30px; height: 12px; border: 1px solid var(--border); border-radius: 2px;
+  background-image: linear-gradient(45deg, #555 25%, transparent 25%, transparent 75%, #555 75%); }
+.swatch-row { display: flex; gap: 2px; }
+button.mini { padding: 0 4px; font-size: 10px; line-height: 15px; }
+.tool-options { gap: 6px; }
+.tool-options .field input[type="text"] { width: 44px; }
+.gradient-editor { margin: 6px 0 4px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+.gradient-bar { height: 14px; border-radius: 3px; border: 1px solid var(--border); margin-bottom: 4px; }
+.stop-row { margin-top: 3px; }
+.stop-row .field input[type="text"] { width: 52px; }
+.add-stop { margin-top: 5px; }
+.stroke-grid { margin-top: 8px; }
+.props h4 .mini { text-transform: none; letter-spacing: 0; }
 .stroke-width .field-label { display: none; }
 .stroke-width .field input[type="text"] { width: 40px; text-align: center; }
 

@@ -20,6 +20,8 @@ use crate::color::{Color, ColorTransform};
 use crate::error::{Error, Result};
 use crate::geom::Path;
 use crate::math::{Matrix, Point};
+pub use crate::paint::{FillRule, GradientStop, LineCap, LineJoin, Paint, PaintStyle, Stroke};
+pub use crate::vector::{HandleSide, Node, NodeKind, NodeRef, SubPath, VectorPath};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -184,6 +186,9 @@ fn is_normal(b: &BlendMode) -> bool {
     *b == BlendMode::Normal
 }
 
+// Shapes dominate scenes, so boxing them would cost an allocation per element
+// for little gain (elements already live in a Vec).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ElementKind {
@@ -230,12 +235,7 @@ impl Element {
             }
         }
         if let ElementKind::Shape(s) = &self.kind {
-            s.geometry.validate().or_else(|e| bad(&e.to_string()))?;
-            if let Some(st) = &s.stroke {
-                if !(st.width.is_finite() && st.width >= 0.0) {
-                    return bad("stroke width must be >= 0");
-                }
-            }
+            s.validate().or_else(|e| bad(&e.to_string()))?;
         }
         Ok(())
     }
@@ -406,12 +406,36 @@ pub fn normalize_degrees(a: f64) -> f64 {
 pub struct Shape {
     pub geometry: Geometry,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fill: Option<Fill>,
+    pub fill: Option<Paint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Stroke>,
+    #[serde(default, skip_serializing_if = "is_nonzero")]
+    pub fill_rule: FillRule,
 }
 
-/// Primitive geometry, centered on the element's content origin.
+fn is_nonzero(r: &FillRule) -> bool {
+    *r == FillRule::NonZero
+}
+
+impl Shape {
+    pub fn new(geometry: Geometry, fill: Option<Paint>, stroke: Option<Stroke>) -> Shape {
+        Shape { geometry, fill, stroke, fill_rule: FillRule::NonZero }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.geometry.validate()?;
+        if let Some(f) = &self.fill {
+            f.validate()?;
+        }
+        if let Some(s) = &self.stroke {
+            s.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Shape geometry. Primitives are centered on the content origin; paths are
+/// free-form in content coordinates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Geometry {
@@ -419,27 +443,43 @@ pub enum Geometry {
     Ellipse { width: f64, height: f64 },
     /// From `(-dx/2, -dy/2)` to `(dx/2, dy/2)`.
     Line { dx: f64, dy: f64 },
+    Path(VectorPath),
 }
 
 impl Geometry {
     pub fn to_path(&self) -> Path {
-        match *self {
-            Geometry::Rect { width, height } => Path::rect(-width / 2.0, -height / 2.0, width, height),
+        match self {
+            Geometry::Rect { width, height } => Path::rect(-width / 2.0, -height / 2.0, *width, *height),
             Geometry::Ellipse { width, height } => Path::ellipse(0.0, 0.0, width / 2.0, height / 2.0),
             Geometry::Line { dx, dy } => Path::line(-dx / 2.0, -dy / 2.0, dx / 2.0, dy / 2.0),
+            Geometry::Path(v) => v.to_path(),
         }
     }
 
-    pub fn is_closed(&self) -> bool {
+    /// The editable anchor form of this geometry (converting primitives).
+    pub fn to_vector_path(&self) -> VectorPath {
+        match self {
+            Geometry::Rect { width, height } => VectorPath::rect(*width, *height),
+            Geometry::Ellipse { width, height } => VectorPath::ellipse(*width, *height),
+            Geometry::Line { dx, dy } => {
+                VectorPath::polyline(&[Point::new(-dx / 2.0, -dy / 2.0), Point::new(dx / 2.0, dy / 2.0)], false)
+            }
+            Geometry::Path(v) => v.clone(),
+        }
+    }
+
+    /// Whether a fill applies (lines are never filled).
+    pub fn is_fillable(&self) -> bool {
         !matches!(self, Geometry::Line { .. })
     }
 
     fn validate(&self) -> Result<()> {
-        let ok = match *self {
+        let ok = match self {
             Geometry::Rect { width, height } | Geometry::Ellipse { width, height } => {
-                width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0
+                width.is_finite() && height.is_finite() && *width >= 0.0 && *height >= 0.0
             }
             Geometry::Line { dx, dy } => dx.is_finite() && dy.is_finite(),
+            Geometry::Path(v) => return v.validate(),
         };
         if ok {
             Ok(())
@@ -447,33 +487,6 @@ impl Geometry {
             Err(Error::Invalid("geometry sizes must be finite and non-negative".into()))
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum Fill {
-    Solid { color: Color },
-}
-
-impl Fill {
-    pub fn transformed(&self, ct: &ColorTransform) -> Fill {
-        match self {
-            Fill::Solid { color } => Fill::Solid { color: ct.apply(*color) },
-        }
-    }
-
-    pub fn is_invisible(&self) -> bool {
-        match self {
-            Fill::Solid { color } => color.a == 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Stroke {
-    pub width: f64,
-    pub color: Color,
 }
 
 /// Where an element lives inside the project.

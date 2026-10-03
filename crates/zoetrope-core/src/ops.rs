@@ -11,11 +11,13 @@ use crate::edit::{Edit, LayerProps};
 use crate::error::{Error, Result};
 use crate::geom::Rect;
 use crate::history::Document;
-use crate::interact::{shape_from_drag, Modifiers, ShapeTool};
+use crate::interact::{shape_from_drag, Modifiers, PaintPart, ShapeOptions, ShapeTool};
+use crate::math::Matrix;
+use crate::vector::freehand;
 use crate::math::Point;
 use crate::model::*;
 use crate::query::element_bounds;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 fn not_found(id: ElementId) -> Error {
@@ -92,10 +94,11 @@ pub fn duplicate_element(doc: &mut Document, id: ElementId, dx: f64, dy: f64) ->
 }
 
 /// Keys of an element's JSON form that `patch_element` may change.
-const PATCHABLE: &[&str] = &["name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke"];
+const PATCHABLE: &[&str] = &["name", "transform", "opacity", "blend", "tint", "geometry", "fill", "stroke", "fillRule"];
 
-/// Merges a JSON patch into an element (`transform` is merged field by
-/// field; other keys replace; `null` clears optional fields). Only
+/// Merges a JSON patch into an element (`transform`, and `stroke` when the
+/// shape already has one, merge field by field; other keys replace; `null`
+/// clears optional fields). Only
 /// `PATCHABLE` keys are accepted; the element's id and type cannot change.
 pub fn patch_element(doc: &mut Document, id: ElementId, patch: &Value) -> Result<()> {
     patch_elements(doc, &[id], patch)
@@ -118,11 +121,20 @@ pub fn patch_elements(doc: &mut Document, ids: &[ElementId], patch: &Value) -> R
                 for (tk, tv) in pt {
                     t.insert(tk.clone(), tv.clone());
                 }
-            } else if k == "fill" || k == "stroke" || k == "geometry" {
+            } else if k == "fill" || k == "stroke" || k == "geometry" || k == "fillRule" {
                 if !matches!(e.kind, ElementKind::Shape(_)) {
                     return Err(Error::Invalid(format!("{k:?} only applies to shapes")));
                 }
-                v[k] = pv.clone();
+                // A partial stroke patch merges into each shape's own stroke,
+                // so one patch can restyle several shapes without copying paint.
+                match (k.as_str(), pv, v.get_mut("stroke")) {
+                    ("stroke", Value::Object(patch), Some(Value::Object(stroke))) => {
+                        for (sk, sv) in patch {
+                            stroke.insert(sk.clone(), sv.clone());
+                        }
+                    }
+                    _ => v[k] = pv.clone(),
+                }
             } else {
                 v[k] = pv.clone();
             }
@@ -154,17 +166,63 @@ pub fn set_element_size(doc: &mut Document, id: ElementId, width: f64, height: f
     doc.execute("Resize", vec![Edit::SetTransform { element: id, transform: t }])
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShapeStyle {
-    pub fill: Option<Color>,
-    pub stroke: Option<Color>,
-    #[serde(default = "default_stroke_width")]
-    pub stroke_width: f64,
+/// Stroke settings held by the drawing tools.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StrokeStyle {
+    pub color: Color,
+    pub width: f64,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    pub dash: Vec<f64>,
 }
 
-fn default_stroke_width() -> f64 {
-    1.0
+impl Default for StrokeStyle {
+    fn default() -> Self {
+        StrokeStyle { color: Color::BLACK, width: 1.0, cap: LineCap::Round, join: LineJoin::Round, dash: Vec::new() }
+    }
+}
+
+impl StrokeStyle {
+    pub fn to_stroke(&self) -> Stroke {
+        Stroke { cap: self.cap, join: self.join, dash: self.dash.clone(), ..Stroke::solid(self.width.max(0.0), self.color) }
+    }
+
+    pub fn of(s: &Stroke) -> StrokeStyle {
+        StrokeStyle { color: s.paint.primary_color(), width: s.width, cap: s.cap, join: s.join, dash: s.dash.clone() }
+    }
+}
+
+/// Fill and stroke for newly drawn shapes. Gradient fills are fitted to
+/// each new shape's bounds.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShapeStyle {
+    pub fill: Option<PaintStyle>,
+    pub stroke: Option<StrokeStyle>,
+}
+
+impl ShapeStyle {
+    /// A shape with this style. Lines (and open paths) are never filled;
+    /// they get a default stroke if the style has none.
+    fn make_shape(&self, geometry: Geometry) -> Shape {
+        let closed = match &geometry {
+            Geometry::Line { .. } => false,
+            Geometry::Path(v) => v.subpaths.iter().any(|sp| sp.closed),
+            _ => true,
+        };
+        let bounds = geometry.to_path().bounds(&Matrix::IDENTITY);
+        let fill = match (&self.fill, closed, bounds) {
+            (Some(style), true, Some(b)) => Some(style.fit(b)),
+            _ => None,
+        };
+        let stroke = match &self.stroke {
+            Some(s) => Some(s.to_stroke()),
+            None if !closed => Some(StrokeStyle::default().to_stroke()),
+            None => None,
+        };
+        Shape::new(geometry, fill, stroke)
+    }
 }
 
 fn check_target_layer(p: &Project, layer: LayerId) -> Result<()> {
@@ -181,6 +239,7 @@ fn check_target_layer(p: &Project, layer: LayerId) -> Result<()> {
 
 /// Creates a shape from a shape-tool drag (stage coords) on top of `layer`.
 /// Returns `None` (and records nothing) if the drag was too small.
+#[allow(clippy::too_many_arguments)]
 pub fn create_shape(
     doc: &mut Document,
     layer: LayerId,
@@ -188,20 +247,12 @@ pub fn create_shape(
     p0: Point,
     p1: Point,
     mods: Modifiers,
+    opts: &ShapeOptions,
     style: &ShapeStyle,
 ) -> Result<Option<ElementId>> {
     check_target_layer(&doc.project, layer)?;
-    let Some(drag) = shape_from_drag(tool, p0, p1, mods) else { return Ok(None) };
-    let stroke_color = match (tool, style.stroke) {
-        (ShapeTool::Line, None) => Some(Color::BLACK),
-        (_, s) => s,
-    };
-    let shape = Shape {
-        geometry: drag.geometry,
-        fill: if tool == ShapeTool::Line { None } else { style.fill.map(|color| Fill::Solid { color }) },
-        stroke: stroke_color.map(|color| Stroke { width: style.stroke_width.max(0.0), color }),
-    };
-    let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Shape(shape));
+    let Some(drag) = shape_from_drag(tool, p0, p1, mods, opts) else { return Ok(None) };
+    let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Shape(style.make_shape(drag.geometry)));
     el.transform = Transform::at(drag.center.x, drag.center.y);
     let id = el.id;
     let index = doc.project.require_layer(layer)?.elements.len();
@@ -209,9 +260,149 @@ pub fn create_shape(
         ShapeTool::Rect => "Rectangle",
         ShapeTool::Ellipse => "Ellipse",
         ShapeTool::Line => "Line",
+        ShapeTool::Polygon => "Polygon",
     };
     doc.execute(label, vec![Edit::InsertElement { layer, index, element: el }])?;
     Ok(Some(id))
+}
+
+/// Creates a path element from a path in stage coordinates (pen/pencil).
+/// The element is positioned at the path's bounds center, which becomes its
+/// pivot.
+pub fn create_path(doc: &mut Document, layer: LayerId, mut path: VectorPath, style: &ShapeStyle, label: &str) -> Result<ElementId> {
+    check_target_layer(&doc.project, layer)?;
+    path.validate()?;
+    let c = path.to_path().bounds(&Matrix::IDENTITY).ok_or_else(|| Error::Invalid("empty path".into()))?.center();
+    path.transform(&Matrix::translate(-c.x, -c.y));
+    let mut el = Element::new(ElementId(doc.project.alloc_id()), ElementKind::Shape(style.make_shape(Geometry::Path(path))));
+    el.transform = Transform::at(c.x, c.y);
+    let id = el.id;
+    let index = doc.project.require_layer(layer)?.elements.len();
+    doc.execute(label, vec![Edit::InsertElement { layer, index, element: el }])?;
+    Ok(id)
+}
+
+/// Creates a path from freehand pointer samples (stage coordinates).
+/// `tolerance` is the simplification distance in stage units. Returns
+/// `None` if the stroke was too short.
+pub fn create_freehand(
+    doc: &mut Document,
+    layer: LayerId,
+    points: &[Point],
+    smooth: bool,
+    tolerance: f64,
+    style: &ShapeStyle,
+) -> Result<Option<ElementId>> {
+    check_target_layer(&doc.project, layer)?;
+    let Some(path) = freehand(points, tolerance, smooth, tolerance * 4.0) else { return Ok(None) };
+    create_path(doc, layer, path, style, "Pencil").map(Some)
+}
+
+fn shape_mut(e: &mut Element) -> Result<&mut Shape> {
+    match &mut e.kind {
+        ElementKind::Shape(s) => Ok(s),
+        _ => Err(Error::Invalid("only shapes can be edited this way".into())),
+    }
+}
+
+/// Converts rectangles/ellipses/lines to editable paths (same appearance).
+pub fn convert_to_path(doc: &mut Document, ids: &[ElementId]) -> Result<()> {
+    let mut edits = Vec::new();
+    for id in ids {
+        let mut e = doc.project.require_element(*id)?.clone();
+        let Ok(s) = shape_mut(&mut e) else { continue };
+        if matches!(s.geometry, Geometry::Path(_)) {
+            continue;
+        }
+        s.geometry = Geometry::Path(s.geometry.to_vector_path());
+        edits.push(Edit::ReplaceElement { element: e });
+    }
+    doc.execute("Convert to Path", edits)
+}
+
+/// Applies `f` to a shape's (converted) path as one undo step. Deletes the
+/// element if the path ends up empty.
+fn modify_path(doc: &mut Document, id: ElementId, label: &str, f: impl FnOnce(&mut VectorPath) -> Result<()>) -> Result<()> {
+    let mut e = doc.project.require_element(id)?.clone();
+    let s = shape_mut(&mut e)?;
+    let mut path = s.geometry.to_vector_path();
+    f(&mut path)?;
+    if path.subpaths.is_empty() {
+        return doc.execute(label, vec![Edit::RemoveElement { element: id }]);
+    }
+    s.geometry = Geometry::Path(path);
+    doc.execute(label, vec![Edit::ReplaceElement { element: e }])
+}
+
+pub fn insert_anchor(doc: &mut Document, id: ElementId, subpath: usize, segment: usize, t: f64) -> Result<NodeRef> {
+    let mut out = None;
+    modify_path(doc, id, "Add Anchor", |p| {
+        out = Some(p.split(subpath, segment, t)?);
+        Ok(())
+    })?;
+    Ok(out.unwrap())
+}
+
+pub fn delete_anchors(doc: &mut Document, id: ElementId, nodes: &[NodeRef]) -> Result<()> {
+    modify_path(doc, id, "Delete Anchor", |p| {
+        p.delete_nodes(nodes);
+        Ok(())
+    })
+}
+
+pub fn convert_anchor(doc: &mut Document, id: ElementId, node: NodeRef) -> Result<()> {
+    modify_path(doc, id, "Convert Anchor", |p| p.convert_node(node))
+}
+
+/// What the eyedropper picked: the clicked part plus the shape's full style.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedStyle {
+    pub part: PaintPart,
+    pub fill: Option<PaintStyle>,
+    pub stroke: Option<StrokeStyle>,
+}
+
+pub fn pick_style(p: &Project, scope: &crate::query::Scope, pt: Point, tolerance: f64) -> Option<PickedStyle> {
+    let (shape, part) = crate::query::pick_shape(p, scope, pt, tolerance)?;
+    Some(PickedStyle {
+        part,
+        fill: shape.fill.as_ref().map(Paint::style),
+        stroke: shape.stroke.as_ref().map(StrokeStyle::of),
+    })
+}
+
+/// Sets the fill or stroke paint of shapes from a geometry-free style
+/// (gradients are fitted to each shape's bounds). `None` removes it. Setting
+/// a stroke paint on a shape without a stroke adds a 1px stroke.
+pub fn set_paint_style(doc: &mut Document, ids: &[ElementId], part: PaintPart, style: Option<&PaintStyle>) -> Result<()> {
+    let mut edits = Vec::new();
+    for id in ids {
+        let mut e = doc.project.require_element(*id)?.clone();
+        let s = shape_mut(&mut e)?;
+        let bounds = s.geometry.to_path().bounds(&Matrix::IDENTITY).unwrap_or(Rect::new(0.0, 0.0, 1.0, 1.0));
+        let paint = style.map(|st| st.fit(bounds));
+        match part {
+            PaintPart::Fill => {
+                if paint.is_some() && !s.geometry.is_fillable() {
+                    return Err(Error::Invalid("lines can't be filled".into()));
+                }
+                s.fill = paint;
+            }
+            PaintPart::Stroke => {
+                s.stroke = match (paint, s.stroke.take()) {
+                    (None, _) => None,
+                    (Some(p), Some(st)) => Some(Stroke { paint: p, ..st }),
+                    (Some(p), None) => Some(Stroke { paint: p, ..Stroke::solid(1.0, Color::BLACK) }),
+                };
+            }
+        }
+        if *doc.project.element(*id).unwrap() != e {
+            edits.push(Edit::ReplaceElement { element: e });
+        }
+    }
+    let label = if part == PaintPart::Fill { "Fill" } else { "Stroke" };
+    doc.execute(label, edits)
 }
 
 /// Embeds an image and places it centered at `at` on top of `layer`.

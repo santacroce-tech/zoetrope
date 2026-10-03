@@ -7,10 +7,42 @@
 
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageBitmap};
+use web_sys::{CanvasGradient, CanvasRenderingContext2d, CanvasWindingRule, HtmlCanvasElement, ImageBitmap};
 use zoetrope_core::geom::{Path, PathCmd};
 use zoetrope_core::render::{FrameInfo, Renderer};
-use zoetrope_core::{AssetId, BlendMode, ColorTransform, Fill, Matrix, Stroke};
+use zoetrope_core::{AssetId, BlendMode, ColorTransform, FillRule, LineCap, LineJoin, Matrix, Paint, Stroke};
+
+/// A resolved Canvas2D paint.
+enum Style {
+    Color(String),
+    Gradient(CanvasGradient),
+}
+
+/// Builds the Canvas2D style for a paint. Gradient geometry is interpreted
+/// in the current transform's space, so call after `set_transform`.
+fn canvas_style(ctx: &CanvasRenderingContext2d, paint: &Paint) -> Style {
+    let gradient = match paint {
+        Paint::Solid { color } => return Style::Color(color.to_css()),
+        Paint::Linear { start, end, .. } => {
+            if (start.x - end.x).abs() < 1e-9 && (start.y - end.y).abs() < 1e-9 {
+                // Degenerate: Canvas would paint nothing; use the last stop.
+                return Style::Color(paint.stops().last().map_or_else(String::new, |s| s.color.to_css()));
+            }
+            ctx.create_linear_gradient(start.x, start.y, end.x, end.y)
+        }
+        Paint::Radial { center, radius, focal, .. } => {
+            let f = focal.unwrap_or(*center);
+            match ctx.create_radial_gradient(f.x, f.y, 0.0, center.x, center.y, *radius) {
+                Ok(g) => g,
+                Err(_) => return Style::Color(paint.primary_color().to_css()),
+            }
+        }
+    };
+    for stop in paint.stops() {
+        gradient.add_color_stop(stop.offset as f32, &stop.color.to_css()).ok();
+    }
+    Style::Gradient(gradient)
+}
 
 /// Reusable offscreen canvases, kept across frames.
 #[derive(Default)]
@@ -140,22 +172,47 @@ impl Renderer for Canvas2dRenderer<'_> {
         }
     }
 
-    fn fill_path(&mut self, path: &Path, transform: &Matrix, fill: &Fill) {
+    fn fill_path(&mut self, path: &Path, transform: &Matrix, paint: &Paint, rule: FillRule) {
         self.set_transform(transform);
         self.trace(path);
-        match fill {
-            Fill::Solid { color } => self.ctx().set_fill_style_str(&color.to_css()),
+        let ctx = self.ctx();
+        match canvas_style(ctx, paint) {
+            Style::Color(c) => ctx.set_fill_style_str(&c),
+            Style::Gradient(g) => ctx.set_fill_style_canvas_gradient(&g),
         }
-        self.ctx().fill();
+        match rule {
+            FillRule::NonZero => ctx.fill(),
+            FillRule::EvenOdd => ctx.fill_with_canvas_winding_rule(CanvasWindingRule::Evenodd),
+        }
     }
 
     fn stroke_path(&mut self, path: &Path, transform: &Matrix, stroke: &Stroke) {
         self.set_transform(transform);
         self.trace(path);
         let ctx = self.ctx();
-        ctx.set_stroke_style_str(&stroke.color.to_css());
+        match canvas_style(ctx, &stroke.paint) {
+            Style::Color(c) => ctx.set_stroke_style_str(&c),
+            Style::Gradient(g) => ctx.set_stroke_style_canvas_gradient(&g),
+        }
         ctx.set_line_width(stroke.width);
+        ctx.set_line_cap(match stroke.cap {
+            LineCap::Butt => "butt",
+            LineCap::Round => "round",
+            LineCap::Square => "square",
+        });
+        ctx.set_line_join(match stroke.join {
+            LineJoin::Miter => "miter",
+            LineJoin::Round => "round",
+            LineJoin::Bevel => "bevel",
+        });
+        ctx.set_miter_limit(stroke.miter_limit);
+        let dash: js_sys::Array = stroke.dash.iter().map(|d| wasm_bindgen::JsValue::from_f64(*d)).collect();
+        ctx.set_line_dash(&dash).ok();
+        ctx.set_line_dash_offset(stroke.dash_offset);
         ctx.stroke();
+        if !stroke.dash.is_empty() {
+            ctx.set_line_dash(&js_sys::Array::new()).ok();
+        }
     }
 
     fn draw_image(&mut self, asset: AssetId, width: f64, height: f64, transform: &Matrix, color: &ColorTransform) {

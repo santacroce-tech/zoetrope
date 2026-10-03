@@ -30,9 +30,11 @@ pub struct FrameInfo {
 pub trait Renderer {
     /// Clears the target and paints the stage background.
     fn begin_frame(&mut self, frame: &FrameInfo);
-    /// `transform` maps path coordinates to backend coordinates (view included).
-    /// The fill's color is final (color transforms already applied).
-    fn fill_path(&mut self, path: &Path, transform: &Matrix, fill: &Fill);
+    /// `transform` maps path coordinates (and gradient geometry) to backend
+    /// coordinates (view included). Paint colors are final (color transforms
+    /// already applied).
+    fn fill_path(&mut self, path: &Path, transform: &Matrix, paint: &Paint, rule: FillRule);
+    /// Width and dash lengths are in path coordinates (they scale with `transform`).
     fn stroke_path(&mut self, path: &Path, transform: &Matrix, stroke: &Stroke);
     /// Draws image `asset` (`width`×`height` pixels) centered on the origin of
     /// `transform`. `color` has uniform rgb multipliers (tint + alpha form).
@@ -117,16 +119,16 @@ impl Ctx<'_> {
         match &el.kind {
             ElementKind::Shape(shape) => {
                 let path = shape.geometry.to_path();
-                if let (Some(fill), true) = (&shape.fill, shape.geometry.is_closed()) {
+                if let (Some(fill), true) = (&shape.fill, shape.geometry.is_fillable()) {
                     let fill = fill.transformed(&ct);
                     if !fill.is_invisible() {
-                        r.fill_path(&path, &m, &fill);
+                        r.fill_path(&path, &m, &fill, shape.fill_rule);
                     }
                 }
                 if let Some(stroke) = &shape.stroke {
-                    let color = ct.apply(stroke.color);
-                    if color.a != 0 && stroke.width > 0.0 {
-                        r.stroke_path(&path, &m, &Stroke { color, ..stroke.clone() });
+                    let paint = stroke.paint.transformed(&ct);
+                    if !paint.is_invisible() && stroke.width > 0.0 {
+                        r.stroke_path(&path, &m, &Stroke { paint, ..stroke.clone() });
                     }
                 }
             }
@@ -148,7 +150,7 @@ impl Ctx<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawOp {
     Begin(FrameInfo),
-    Fill { path: Path, transform: Matrix, fill: Fill },
+    Fill { path: Path, transform: Matrix, paint: Paint, rule: FillRule },
     Stroke { path: Path, transform: Matrix, stroke: Stroke },
     Image { asset: AssetId, width: f64, height: f64, transform: Matrix, color: ColorTransform },
     BeginGroup { blend: BlendMode, alpha: f64 },
@@ -167,8 +169,8 @@ impl Renderer for RecordingRenderer {
     fn begin_frame(&mut self, frame: &FrameInfo) {
         self.ops.push(DrawOp::Begin(frame.clone()));
     }
-    fn fill_path(&mut self, path: &Path, transform: &Matrix, fill: &Fill) {
-        self.ops.push(DrawOp::Fill { path: path.clone(), transform: *transform, fill: fill.clone() });
+    fn fill_path(&mut self, path: &Path, transform: &Matrix, paint: &Paint, rule: FillRule) {
+        self.ops.push(DrawOp::Fill { path: path.clone(), transform: *transform, paint: paint.clone(), rule });
     }
     fn stroke_path(&mut self, path: &Path, transform: &Matrix, stroke: &Stroke) {
         self.ops.push(DrawOp::Stroke { path: path.clone(), transform: *transform, stroke: stroke.clone() });
@@ -192,7 +194,7 @@ pub struct NullRenderer;
 
 impl Renderer for NullRenderer {
     fn begin_frame(&mut self, _: &FrameInfo) {}
-    fn fill_path(&mut self, _: &Path, _: &Matrix, _: &Fill) {}
+    fn fill_path(&mut self, _: &Path, _: &Matrix, _: &Paint, _: FillRule) {}
     fn stroke_path(&mut self, _: &Path, _: &Matrix, _: &Stroke) {}
     fn draw_image(&mut self, _: AssetId, _: f64, _: f64, _: &Matrix, _: &ColorTransform) {}
     fn begin_group(&mut self, _: BlendMode, _: f64) {}

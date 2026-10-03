@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { loadEngine, type Engine, type HistoryState, type LayerNode, type Pt, type StageInfo } from "./engine";
+import {
+  loadEngine,
+  type Engine,
+  type HistoryState,
+  type LayerNode,
+  type NodeRef,
+  type PickedStyle,
+  type Pt,
+  type ShapeStyle,
+  type StageInfo,
+} from "./engine";
 import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
-import { StageView, type ShapeStyle, type StageSettings, type Tool } from "./components/StageView";
+import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
 import { LayersPanel } from "./components/LayersPanel";
 import { PropertiesPanel } from "./components/PropertiesPanel";
-import { TOOL_KEYS, ToolPalette } from "./components/ToolPalette";
+import { TOOL_KEYS, ToolOptionsBar, ToolPalette } from "./components/ToolPalette";
 import { clampZoom, zoomAt, type View } from "./view";
 
 export default function App() {
@@ -47,7 +57,12 @@ function Editor({ engine }: { engine: Engine }) {
   const [selection, setSelection] = useState<number[]>([]);
   const [activeLayer, setActiveLayer] = useState<number | null>(null);
   const [tool, setTool] = useState<Tool>("select");
-  const [shapeStyle, setShapeStyle] = useState<ShapeStyle>({ fill: "#e86a92", stroke: "#222222", strokeWidth: 2 });
+  const [shapeStyle, setShapeStyle] = useState<ShapeStyle>({
+    fill: { type: "solid", color: "#e86a92" },
+    stroke: { color: "#222222", width: 2, cap: "round", join: "round", dash: [] },
+  });
+  const [toolOptions, setToolOptions] = useState<ToolOptions>({ sides: 5, star: null, pencilSmooth: true });
+  const [anchors, setAnchors] = useState<NodeRef[]>([]);
   const [settings, setSettings] = useState<StageSettings>({
     showGrid: false,
     gridSize: 20,
@@ -189,6 +204,21 @@ function Editor({ engine }: { engine: Engine }) {
     [placeImages],
   );
 
+  // Anchor selection belongs to one shape; reset it when the selection changes.
+  useEffect(() => setAnchors([]), [selection]);
+
+  const onPicked = useCallback((picked: PickedStyle) => {
+    // Like Flash: picking a fill loads the bucket; picking a stroke loads the stroke style.
+    if (picked.part === "fill" && picked.fill) {
+      setShapeStyle((s) => ({ ...s, fill: picked.fill }));
+      setTool("bucket");
+      setMessage({ text: "Picked fill — click shapes to apply it" });
+    } else if (picked.stroke) {
+      setShapeStyle((s) => ({ ...s, stroke: picked.stroke }));
+      setMessage({ text: "Picked stroke" });
+    }
+  }, []);
+
   const sel = JSON.stringify(selection);
   const hasSel = selection.length > 0;
   const undo = () => run(() => engine.undo());
@@ -221,6 +251,7 @@ function Editor({ engine }: { engine: Engine }) {
     else if (mod && k === "o") guardUnsaved("Open", open);
     else if (mod && k === "i") importDialog();
     else if (mod && k === "a") setSelection(JSON.parse(engine.selectAll()));
+    else if (mod && k === "b" && hasSel) run(() => engine.convertToPath(sel));
     else if (mod && k === "d" && hasSel) run(() => setSelection(JSON.parse(engine.duplicateElements(sel, 10, 10))));
     else if (mod && (e.key === "]" || e.key === "}") && hasSel) run(() => engine.arrange(sel, e.shiftKey ? "front" : "forward"));
     else if (mod && (e.key === "[" || e.key === "{") && hasSel) run(() => engine.arrange(sel, e.shiftKey ? "back" : "backward"));
@@ -231,7 +262,10 @@ function Editor({ engine }: { engine: Engine }) {
     else if (mod && e.key === "'") setSettings((s) => ({ ...s, [e.shiftKey ? "snapToGrid" : "showGrid"]: !s[e.shiftKey ? "snapToGrid" : "showGrid"] }));
     else if (mod) handled = false;
     else if (e.key === "Escape") setSelection([]);
-    else if ((e.key === "Delete" || e.key === "Backspace") && hasSel) {
+    else if ((e.key === "Delete" || e.key === "Backspace") && tool === "subselect" && anchors.length && selection.length === 1) {
+      run(() => engine.deleteAnchors(selection[0], JSON.stringify(anchors)));
+      setAnchors([]);
+    } else if ((e.key === "Delete" || e.key === "Backspace") && hasSel) {
       run(() => engine.deleteElements(sel));
       setSelection([]);
     } else if (e.key === "ArrowLeft" && hasSel) run(() => engine.translateElements(sel, -step, 0));
@@ -294,6 +328,7 @@ function Editor({ engine }: { engine: Engine }) {
             px
           </label>
         </div>
+        <ToolOptionsBar tool={tool} options={toolOptions} onOptions={setToolOptions} />
         <div className="group">
           <button onClick={() => zoomBy(0.8)} title="⌘−">−</button>
           <button className="zoom" onClick={() => zoomTo(1)} title="⌘1: 100%">
@@ -328,6 +363,10 @@ function Editor({ engine }: { engine: Engine }) {
           stage={stage}
           selection={selection}
           onSelect={setSelection}
+          anchors={anchors}
+          onAnchors={setAnchors}
+          toolOptions={toolOptions}
+          onPicked={onPicked}
           tool={tool}
           activeLayer={activeLayer}
           shapeStyle={shapeStyle}
