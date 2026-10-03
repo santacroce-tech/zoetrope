@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const FORMAT_ID: &str = "zoetrope-project";
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One migration step: upgrades a whole envelope from version N to N+1.
 /// It may assume `schemaVersion == N`; the runner rewrites the version field.
@@ -19,7 +19,33 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// `MIGRATIONS[i]` upgrades schema version `i + 1` to `i + 2`.
 /// Append here whenever `SCHEMA_VERSION` is bumped.
-const MIGRATIONS: &[Migration] = &[];
+const MIGRATIONS: &[Migration] = &[v1_to_v2];
+
+/// v1 → v2 (Phase 3): strokes changed from `{ width, color }` to
+/// `{ width, paint, cap, join, miterLimit, … }`. Old strokes become solid
+/// paints pinned to the caps/joins Canvas2D used before (butt / miter / 10),
+/// so v1 files render exactly as they did.
+fn v1_to_v2(mut v: Value) -> Result<Value> {
+    fn walk(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                if let Some(Value::Object(stroke)) = map.get_mut("stroke") {
+                    if let Some(color) = stroke.remove("color") {
+                        stroke.insert("paint".into(), serde_json::json!({ "type": "solid", "color": color }));
+                        stroke.insert("cap".into(), "butt".into());
+                        stroke.insert("join".into(), "miter".into());
+                        stroke.insert("miterLimit".into(), 10.into());
+                    }
+                }
+                map.values_mut().for_each(walk);
+            }
+            Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    walk(&mut v["project"]);
+    Ok(v)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

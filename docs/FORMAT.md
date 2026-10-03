@@ -1,13 +1,20 @@
-# Project file format (`.zoe`) — schema version 1
+# Project file format (`.zoe`) — schema version 2
 
 UTF-8 JSON. Field names are camelCase. Unknown fields are ignored on read.
 Fields marked *optional* may be omitted and take the listed default; the
 writer omits several of them when they hold their default.
 
-Phase 2 added fields (pivot, opacity, blend, tint, layer kinds/folders,
-bitmaps, assets). All additions are optional with defaults, so Phase 1 files
-load unchanged and the schema version stays 1 (covered by the
-`phase1_files_still_load` test).
+History:
+
+* **v1** (Phases 1–2). Phase 2's additions (pivot, opacity, blend, tint,
+  layer kinds/folders, bitmaps, assets) were all optional with defaults, so
+  they did not need a version bump.
+* **v2** (Phase 3). Strokes changed shape: `{ width, color }` became
+  `{ width, paint, cap, join, miterLimit, dash, dashOffset }`. The `v1_to_v2`
+  migration rewrites every v1 stroke to a solid paint with `cap: "butt"`,
+  `join: "miter"` and `miterLimit: 10`, which are exactly the Canvas2D
+  defaults v1 rendered with, so old files look identical (covered by the
+  `phase1_files_still_load` test).
 
 ## Envelope
 
@@ -75,7 +82,8 @@ Layer lists (`Symbol.layers`, `Layer.children`) are **bottom-to-top**
 | `tint` | `{ "color": Color, "amount": 0..1 }` | *optional*, default none |
 | `type` | `"shape"` \| `"instance"` \| `"bitmap"` | discriminator, see below |
 
-* `"type": "shape"`: `geometry`, optional `fill`, optional `stroke`.
+* `"type": "shape"`: `geometry`, optional `fill` (Paint), optional `stroke`
+  (Stroke), optional `fillRule` (`"nonZero"` default \| `"evenOdd"`).
 * `"type": "instance"`: `symbol` (id). Instance references must be acyclic.
 * `"type": "bitmap"`: `asset` (id of an image asset), drawn at the image's pixel size, centered on the content origin.
 
@@ -103,13 +111,53 @@ The pivot (anchor point) is given in content coordinates. It is placed at
 `(x, y)`, and rotation/scale/skew act around it. Y points down, so positive
 rotation is clockwise. `skew(kx, ky)` maps `(x, y) → (x + tan(kx)·y, tan(ky)·x + y)`.
 
-### Geometry, fill, stroke
+### Geometry
 
-Geometry is centered on the content origin:
+Primitives are centered on the content origin:
 `{"kind":"rect","width","height"}` | `{"kind":"ellipse","width","height"}` |
 `{"kind":"line","dx","dy"}` (from `(-dx/2,-dy/2)` to `(dx/2,dy/2)`; never filled).
 
-**Fill**: `{"type":"solid","color"}`. **Stroke**: `{"width","color"}`.
+**Paths** are `{"kind":"path","subpaths":[SubPath…]}` in content coordinates:
+
+| SubPath field | Notes |
+|---------------|-------|
+| `nodes` | Node[] (at least one) |
+| `closed` | bool, *optional*, default `false` |
+
+| Node field | Notes |
+|------------|-------|
+| `x`, `y` | anchor point |
+| `in`, `out` | *optional* `{x, y}`: absolute positions of the incoming/outgoing bezier handles |
+| `kind` | `"corner"` (default) \| `"smooth"` (handles collinear) \| `"symmetric"` (collinear and equal length). An editing constraint only; it doesn't affect rendering. |
+
+Segment `a → b` is a cubic bezier with control points `a.out ?? a` and
+`b.in ?? b`, or a straight line when both are absent. A closed subpath adds
+the segment last → first. Quadratic curves are stored as their exact cubic
+equivalent.
+
+### Paint
+
+| `type` | Fields |
+|--------|--------|
+| `"solid"` | `color` |
+| `"linear"` | `start`, `end` (`{x, y}`, content coords), `stops` |
+| `"radial"` | `center`, `radius` (> 0), *optional* `focal` (default `center`, must lie inside the circle), `stops` |
+
+**Stops**: `[{ "offset": 0..1, "color": Color }, …]`, non-empty, in ascending
+offset order. Gradients pad beyond their ends. Their geometry is in the
+shape's content coordinates, so it moves, rotates and scales with the shape.
+
+### Stroke
+
+| Field | Notes |
+|-------|-------|
+| `width` | ≥ 0, content units (scales with the element) |
+| `paint` | Paint |
+| `cap` | `"butt"` \| `"round"` (default) \| `"square"` |
+| `join` | `"miter"` \| `"round"` (default) \| `"bevel"` |
+| `miterLimit` | ≥ 1, default 4 |
+| `dash` | *optional* dash/gap lengths (content units); omitted/empty = solid |
+| `dashOffset` | *optional*, default 0 |
 
 **Color**: string `"#rrggbb"` (opaque) or `"#rrggbbaa"`; `"#rgb"` is accepted on read.
 
@@ -128,11 +176,15 @@ Geometry is centered on the content origin:
 The root symbol exists; stage values are in range; ids are unique and
 `< nextId`; folders hold no elements and only folders hold child layers;
 element values are in range (opacity, tint amount, finite transforms,
-non-negative sizes and stroke widths); every instance and bitmap reference
-resolves; no symbol contains itself, directly or transitively.
+non-negative sizes and stroke widths, valid paints/dashes, non-empty finite
+paths); every instance and bitmap reference resolves; no symbol contains
+itself, directly or transitively.
+
+Floats round-trip exactly (`serde_json` with `float_roundtrip`), so save →
+load → save is byte-stable.
 
 ## Planned changes
 
 Timelines and keyframes (Phase 4) change the layer structure. That will be
-schema v2, with a migration that wraps each v1 layer's `elements` into a
-single keyframe at frame 0.
+schema v3, with a migration that wraps each layer's `elements` into a single
+keyframe at frame 0.

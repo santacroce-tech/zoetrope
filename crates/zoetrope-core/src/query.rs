@@ -86,8 +86,8 @@ fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, depth:
             let Some(inv) = m.invert() else { return false };
             let q = inv.apply(pt);
             let path = s.geometry.to_path();
-            let closed = s.geometry.is_closed();
-            if closed && (s.fill.is_some() || s.stroke.is_none()) && path.contains(q) {
+            let fillable = s.geometry.is_fillable();
+            if fillable && (s.fill.is_some() || s.stroke.is_none()) && path.contains_with(q, s.fill_rule) {
                 return true;
             }
             let half = s.stroke.as_ref().map_or(0.0, |st| st.width / 2.0);
@@ -109,6 +109,53 @@ fn hits(p: &Project, kind: &ElementKind, m: &Matrix, pt: Point, tol: f64, depth:
             })
         }
     }
+}
+
+/// The front-most *shape* drawn under `pt`, looking inside instances, and
+/// whether the point is on its stroke or its fill (eyedropper). Locked
+/// layers are included; hidden ones are not.
+pub fn pick_shape(p: &Project, scope: &Scope, pt: Point, tolerance: f64) -> Option<(Shape, crate::interact::PaintPart)> {
+    let sym = p.symbol(scope.symbol)?;
+    pick_in_layers(p, sym, &scope.matrix, pt, tolerance, 0)
+}
+
+fn pick_in_layers(p: &Project, sym: &Symbol, m: &Matrix, pt: Point, tol: f64, depth: usize) -> Option<(Shape, crate::interact::PaintPart)> {
+    use crate::interact::PaintPart;
+    if depth > MAX_NESTING_DEPTH {
+        return None;
+    }
+    for (layer, visible, _) in sym.content_layers().into_iter().rev() {
+        if !visible {
+            continue;
+        }
+        for e in layer.elements.iter().rev() {
+            let em = *m * e.transform.matrix();
+            match &e.kind {
+                ElementKind::Shape(s) => {
+                    let Some(inv) = em.invert() else { continue };
+                    let q = inv.apply(pt);
+                    let path = s.geometry.to_path();
+                    if let Some(st) = &s.stroke {
+                        if path.distance_to_outline(q) <= st.width / 2.0 + tol / scale_factor(&em) {
+                            return Some((s.clone(), PaintPart::Stroke));
+                        }
+                    }
+                    if s.fill.is_some() && s.geometry.is_fillable() && path.contains_with(q, s.fill_rule) {
+                        return Some((s.clone(), PaintPart::Fill));
+                    }
+                }
+                ElementKind::Instance { symbol } => {
+                    if let Some(child) = p.symbol(*symbol) {
+                        if let Some(hit) = pick_in_layers(p, child, &em, pt, tol, depth + 1) {
+                            return Some(hit);
+                        }
+                    }
+                }
+                ElementKind::Bitmap { .. } => {}
+            }
+        }
+    }
+    None
 }
 
 /// Selectable elements of the scope whose stage bounds intersect `rect`,

@@ -96,9 +96,10 @@ export interface ElementData {
   blend?: BlendMode;
   tint?: { color: string; amount: number };
   type: "shape" | "instance" | "bitmap";
-  geometry?: { kind: "rect" | "ellipse" | "line"; width?: number; height?: number; dx?: number; dy?: number };
-  fill?: { type: "solid"; color: string };
-  stroke?: { width: number; color: string };
+  geometry?: { kind: "rect" | "ellipse" | "line" | "path"; width?: number; height?: number; dx?: number; dy?: number };
+  fill?: Paint;
+  stroke?: StrokeData;
+  fillRule?: FillRule;
   symbol?: number;
   asset?: number;
 }
@@ -126,12 +127,7 @@ export interface Guides {
   y: number[];
 }
 
-export type ShapeTool = "rect" | "ellipse" | "line";
-
-export interface ShapeDrag {
-  geometry: NonNullable<ElementData["geometry"]>;
-  center: Pt;
-}
+export type ShapeTool = "rect" | "ellipse" | "line" | "polygon";
 
 export type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
@@ -151,4 +147,113 @@ export interface SnapConfig {
 export interface Modifiers {
   shift: boolean;
   alt: boolean;
+}
+
+// ---------- Phase 3: paints, paths, pen ----------
+
+export interface GradientStop {
+  offset: number;
+  color: string;
+}
+
+export type Paint =
+  | { type: "solid"; color: string }
+  | { type: "linear"; start: Pt; end: Pt; stops: GradientStop[] }
+  | { type: "radial"; center: Pt; radius: number; focal?: Pt; stops: GradientStop[] };
+
+/** Geometry-free paint, as held by tools; the core fits gradients to shapes. */
+export type PaintStyle =
+  | { type: "solid"; color: string }
+  | { type: "linear"; stops: GradientStop[] }
+  | { type: "radial"; stops: GradientStop[] };
+
+export type LineCap = "butt" | "round" | "square";
+export type LineJoin = "miter" | "round" | "bevel";
+export type FillRule = "nonZero" | "evenOdd";
+
+export interface StrokeData {
+  width: number;
+  paint: Paint;
+  cap: LineCap;
+  join: LineJoin;
+  miterLimit: number;
+  dash?: number[];
+  dashOffset?: number;
+}
+
+export interface StrokeStyle {
+  color: string;
+  width: number;
+  cap: LineCap;
+  join: LineJoin;
+  dash: number[];
+}
+
+export interface ShapeStyle {
+  fill: PaintStyle | null;
+  stroke: StrokeStyle | null;
+}
+
+export interface ShapeOptions {
+  sides: number;
+  star: number | null;
+}
+
+export interface Polyline {
+  points: Pt[];
+  closed: boolean;
+}
+
+export interface NodeRef {
+  subpath: number;
+  node: number;
+}
+
+export interface NodeInfo {
+  x: number;
+  y: number;
+  in: Pt | null;
+  out: Pt | null;
+  kind: "corner" | "smooth" | "symmetric";
+}
+
+export interface PathInfo {
+  subpaths: NodeInfo[][];
+  closed: boolean[];
+  outline: Polyline[];
+  primitive: boolean;
+}
+
+export interface PathHit {
+  subpath: number;
+  segment: number;
+  t: number;
+  distance: number;
+}
+
+export interface PenPreview {
+  outline: Polyline[];
+  anchors: Pt[];
+  handles: [Pt, Pt][];
+  canClose: boolean;
+}
+
+export type GradientControls =
+  | { kind: "linear"; start: Pt; end: Pt }
+  | { kind: "radial"; center: Pt; radius: Pt; focal: Pt; ring: Pt[] };
+
+export type GradientHandle = "start" | "end" | "center" | "radius" | "focal";
+
+export interface PickedStyle {
+  part: "fill" | "stroke";
+  fill: PaintStyle | null;
+  stroke: StrokeStyle | null;
+}
+
+/** CSS preview of a paint style (for swatches and gradient bars). */
+export function cssPaint(p: PaintStyle | Paint | null | undefined): string {
+  if (!p) return "transparent";
+  if (p.type === "solid") return p.color;
+  const stops = p.stops.map((s) => `${s.color} ${(s.offset * 100).toFixed(1)}%`).join(", ");
+  return p.type === "linear" ? `linear-gradient(90deg, ${stops})` : `radial-gradient(circle, ${stops})`;
 }
