@@ -328,7 +328,7 @@ impl Engine {
             .filter(|s| s.id != p.root)
             .map(|s| {
                 let uses = p.symbols.iter().flat_map(|o| o.instanced_symbols()).filter(|id| *id == s.id).count();
-                serde_json::json!({ "id": s.id.0, "name": s.name, "kind": s.kind, "uses": uses, "length": s.length() })
+                serde_json::json!({ "id": s.id.0, "name": s.name, "kind": s.kind, "uses": uses, "length": s.length(), "hasScript": s.script.is_some() })
             })
             .collect();
         to_json(&items)
@@ -574,6 +574,74 @@ impl Engine {
         pl.render(&self.doc.project, RenderOptions { view, clip_to_stage: clip, show_guides, onion: None }, &mut r);
     }
 
+    /// Scripts due since the last call (empty when not playing):
+    /// `{ removed: [path], instances: [{ path, symbol, script, where }],
+    /// frames: [{ path, symbol, layer, frame, script, where }] }`.
+    /// The host runs removals, then instance scripts, then frame scripts.
+    #[wasm_bindgen(js_name = playScriptsJson)]
+    pub fn play_scripts_json(&mut self) -> String {
+        let p = &self.doc.project;
+        let Some(pl) = &mut self.player else { return r#"{"removed":[],"instances":[],"frames":[]}"#.into() };
+        let removed = pl.take_removed();
+        let instances: Vec<_> = pl
+            .take_instance_scripts(p)
+            .into_iter()
+            .map(|s| {
+                let name = p.symbol(s.symbol).map_or("?", |x| x.name.as_str());
+                serde_json::json!({ "path": s.path, "symbol": s.symbol.0, "script": s.script, "where": format!("{name} (symbol script)") })
+            })
+            .collect();
+        let frames: Vec<_> = pl
+            .take_frame_scripts(p)
+            .into_iter()
+            .map(|s| {
+                let at = zoetrope_core::script::frame_script_location(p, s.symbol, s.layer, s.frame);
+                serde_json::json!({ "path": s.path, "symbol": s.symbol.0, "layer": s.layer.0, "frame": s.frame, "script": s.script, "where": at })
+            })
+            .collect();
+        serde_json::json!({ "removed": removed, "instances": instances, "frames": frames }).to_string()
+    }
+
+    /// One script-bridge call (see `zoetrope_core::script::Call`); returns
+    /// its JSON result. Throws with a readable message on misuse.
+    #[wasm_bindgen(js_name = scriptCall)]
+    pub fn script_call(&mut self, call_json: &str) -> Result<String, JsError> {
+        let Some(pl) = &mut self.player else { return Err(JsError::new("not playing")) };
+        let call: zoetrope_core::script::Call = parse("script call", call_json)?;
+        let v = zoetrope_core::script::call(&self.doc.project, pl, call).map_err(js_err)?;
+        Ok(v.to_string())
+    }
+
+    /// Frame script on the keyframe spanning `frame` (`null`/blank removes it).
+    #[wasm_bindgen(js_name = setFrameScript)]
+    pub fn set_frame_script(&mut self, layers_json: &str, frame: u32, script: Option<String>) -> Result<(), JsError> {
+        ops::set_frame_script(&mut self.doc, &layer_ids(layers_json)?, frame, script.as_deref()).map_err(js_err)
+    }
+
+    /// Label of the keyframe spanning `frame` (`null`/blank removes it).
+    #[wasm_bindgen(js_name = setFrameLabel)]
+    pub fn set_frame_label(&mut self, layers_json: &str, frame: u32, label: Option<String>) -> Result<(), JsError> {
+        ops::set_frame_label(&mut self.doc, &layer_ids(layers_json)?, frame, label.as_deref()).map_err(js_err)
+    }
+
+    /// A symbol's script (`null`/blank removes it).
+    #[wasm_bindgen(js_name = setSymbolScript)]
+    pub fn set_symbol_script(&mut self, symbol: u32, script: Option<String>) -> Result<(), JsError> {
+        ops::set_symbol_script(&mut self.doc, SymbolId(symbol), script.as_deref()).map_err(js_err)
+    }
+
+    /// `null` or the symbol's script.
+    #[wasm_bindgen(js_name = symbolScript)]
+    pub fn symbol_script(&self, symbol: u32) -> Option<String> {
+        self.doc.project.symbol(SymbolId(symbol)).and_then(|s| s.script.clone())
+    }
+
+    /// The runtime's main-timeline frame (the editing frame when not playing).
+    #[wasm_bindgen(js_name = playFrame)]
+    pub fn play_frame(&self) -> u32 {
+        self.player.as_ref().map_or(self.frame, |pl| pl.frame)
+    }
+
     /// Stops the runtime; the playhead stays where playback reached.
     #[wasm_bindgen(js_name = playStop)]
     pub fn play_stop(&mut self) -> u32 {
@@ -694,9 +762,10 @@ impl Engine {
 
     // ----- documents -----
 
+    /// `kind`: `"animation"` (default) or `"game"` (the scripted demo).
     #[wasm_bindgen(js_name = newDemo)]
-    pub fn new_demo(&mut self) {
-        self.replace_document(demo::demo_project());
+    pub fn new_demo(&mut self, kind: Option<String>) {
+        self.replace_document(if kind.as_deref() == Some("game") { demo::game_project() } else { demo::demo_project() });
     }
 
     /// Serializes the project in the versioned file format.

@@ -149,6 +149,17 @@ pub trait Clock {
     /// The frame the instance at `path` (a `kind` symbol) shows, given the
     /// stateless timing rule's answer. Must be < the symbol's length; callers clamp.
     fn frame(&self, path: &[(u32, u32)], kind: SymbolKind, stateless: u32) -> u32;
+
+    /// Properties a script has set on the element at `path` (whose last
+    /// step is the element's own layer and track).
+    fn element_override(&self, _path: &[(u32, u32)]) -> Option<&crate::player::Override> {
+        None
+    }
+
+    /// Cheap check that lets the walk skip override lookups entirely.
+    fn has_overrides(&self) -> bool {
+        false
+    }
 }
 
 /// Timing derived purely from the timeline (editing, scrubbing, export of a
@@ -268,7 +279,22 @@ impl<'a> Ctx<'a> {
         excl: Option<usize>,
         r: &mut dyn Renderer,
     ) {
-        let el = &shown.element;
+        let overridden;
+        let el: &Element = if self.clock.has_overrides() {
+            path.push((layer.0, shown.element.track()));
+            let ov = self.clock.element_override(path);
+            path.pop();
+            match ov {
+                Some(o) if o.visible == Some(false) => return,
+                Some(o) => {
+                    overridden = o.apply(&shown.element);
+                    &overridden
+                }
+                None => &shown.element,
+            }
+        } else {
+            &shown.element
+        };
         // Edit-in-place context: skip the edited instance, follow its path.
         let child_excl = match excl {
             Some(k) if self.exclude.get(k) == Some(&el.id) => {

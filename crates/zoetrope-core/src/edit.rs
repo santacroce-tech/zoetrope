@@ -37,6 +37,7 @@ pub enum Edit {
     /// Removes an unused, non-root symbol.
     RemoveSymbol { symbol: SymbolId },
     SetSymbolProps { symbol: SymbolId, name: String, kind: SymbolKind },
+    SetSymbolScript { symbol: SymbolId, script: Option<String> },
 }
 
 /// The editable, non-structural fields of a layer.
@@ -249,6 +250,10 @@ impl Edit {
                 let s = p.symbol_mut(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
                 let old = Edit::SetSymbolProps { symbol, name: std::mem::replace(&mut s.name, name), kind: std::mem::replace(&mut s.kind, kind) };
                 Ok(old)
+            }
+            Edit::SetSymbolScript { symbol, script } => {
+                let s = p.symbol_mut(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
+                Ok(Edit::SetSymbolScript { symbol, script: std::mem::replace(&mut s.script, script) })
             }
         }
     }

@@ -312,6 +312,10 @@ export interface KeyframeView {
   empty: boolean;
   tween?: Tween;
   sound?: SoundRef;
+  /** Frame label (scripts can jump to it). */
+  label?: string;
+  /** Frame script (JavaScript). */
+  script?: string;
 }
 
 export interface Onion {
@@ -331,6 +335,8 @@ export interface LibraryItem {
   kind: SymbolKind;
   uses: number;
   length: number;
+  /** Has a symbol script. */
+  hasScript: boolean;
 }
 
 export interface Crumb {

@@ -52,6 +52,17 @@ async fn save_project(app: AppHandle, contents: String, path: Option<String>) ->
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// Asks where to save an exported HTML player and writes `contents` there.
+/// Returns the path written, or null if the user cancelled.
+#[tauri::command]
+async fn export_html(app: AppHandle, contents: String, name: String) -> Result<Option<String>, String> {
+    let picked = app.dialog().file().add_filter("Web page", &["html"]).set_file_name(name).blocking_save_file();
+    let Some(fp) = picked else { return Ok(None) };
+    let path = to_path(fp)?;
+    write_atomic(&path, &contents)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 /// Shows an open dialog and returns the chosen file, or null if cancelled.
 #[tauri::command]
 async fn open_project(app: AppHandle) -> Result<Option<OpenedFile>, String> {
@@ -112,7 +123,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(PickedFiles::default())
-        .invoke_handler(tauri::generate_handler![save_project, open_project, pick_files, read_picked_file])
+        .invoke_handler(tauri::generate_handler![save_project, open_project, export_html, pick_files, read_picked_file])
         .run(tauri::generate_context!())
         .expect("error while running Zoetrope");
 }

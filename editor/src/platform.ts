@@ -26,6 +26,16 @@ export async function saveProject(contents: string, path: string | null): Promis
   return name;
 }
 
+/** Saves an exported HTML page (asks where). Returns the path/name, or null if cancelled. */
+export async function saveHtml(contents: string, name: string): Promise<string | null> {
+  if (isTauri) return invoke<string | null>("export_html", { contents, name });
+  const url = URL.createObjectURL(new Blob([contents], { type: "text/html" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  return name;
+}
+
 /** Prompts for a project file. Returns null if cancelled. */
 export async function openProject(): Promise<OpenedFile | null> {
   if (isTauri) return invoke<OpenedFile | null>("open_project");

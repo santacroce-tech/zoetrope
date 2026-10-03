@@ -1,4 +1,4 @@
-# Project file format (`.zoe`) — schema version 4
+# Project file format (`.zoe`) — schema version 5
 
 UTF-8 JSON. Field names are camelCase. Unknown fields are ignored on read.
 Fields marked *optional* may be omitted and take the listed default; the
@@ -23,6 +23,8 @@ History:
   sounds. These are all additions, so `v3_to_v4` changes nothing but the
   version. The bump exists so that a v3 reader rejects v4 files with a clear
   "newer version" error rather than an "unknown variant" error.
+* **v5** (Phase 7). Adds frame labels, frame scripts and symbol scripts. These
+  are optional fields, so `v4_to_v5` changes only the version.
 
 ## Envelope
 
@@ -63,7 +65,9 @@ test that loads a fixture of the old version. Purely additive optional fields
 **Stage**: `width`, `height` (stage px, in (0, 16384]), `background` (Color), `fps` (in (0, 240]).
 
 **Symbol**: `id`, `name`, `kind` (*optional*, default `"graphic"`: one of
-`"graphic"`, `"movieClip"`, `"button"`; see *Symbol timing*), `layers: Layer[]`.
+`"graphic"`, `"movieClip"`, `"button"`; see *Symbol timing*), `layers: Layer[]`,
+`script` (*optional*: JavaScript run for every instance as it appears; see
+docs/SCRIPTING.md).
 The root symbol is the main timeline; its kind is irrelevant (the demo marks
 it `movieClip`).
 
@@ -94,6 +98,8 @@ that layer. A symbol's length is its longest layer (≥ 1).
 | `elements` | Element[], **back-to-front**. *Optional*, default `[]` (a blank keyframe). |
 | `tween` | *optional* Tween: interpolate toward the **next** keyframe over this span |
 | `sound` | *optional* SoundRef: a sound attached to this keyframe (see "Sound timing") |
+| `label` | *optional* frame label (non-blank); scripts jump to it with `gotoAndPlay("label")`. With duplicates, the earliest frame wins. |
+| `script` | *optional* frame script (JavaScript), run when the playhead enters this keyframe (docs/SCRIPTING.md) |
 
 | SoundRef field | Notes |
 |----------------|-------|
@@ -153,10 +159,19 @@ timeline down. What frame an instance of a symbol of length *L* shows:
 | Movie clip | Its own clock: frame 0 on the tick it **appears**, then +1 per tick, looping (`mod L`). It "appears" when its track starts an unbroken run of keyframes (same layer, same track, same symbol) containing it; it keeps its clock across those keyframes and restarts if it disappears and comes back. |
 | Button | Frame 0 Up, 1 Over (pointer over the hit area), 2 Down (pressed on it), 3 Hit (the clickable area; never drawn; if missing, the Up art is the hit area). |
 
-The **runtime** (`player::Player`: preview playback now, the exported player
-and scripts later) holds the clocks: each tick advances the main timeline by
-one (looping) and every on-stage movie clip by one. A movie clip still on
-stage when the main timeline loops keeps running.
+The **runtime** (`player::Player`, used by preview playback, the exported
+player and scripts) holds the clocks. Each tick advances the main timeline and
+every on-stage movie clip by one frame, looping, *while they are playing*
+(scripts can `stop()`, `play()` and `goto`). A movie clip still on stage when
+the main timeline loops keeps running. A timeline **enters** a frame when it
+advances to it, when a script jumps to a different frame, or when its
+instance appears. Entering queues that frame's scripts and fires its event
+sounds; a stopped timeline never re-enters its frame.
+
+Scripts can take over an instance's `x`, `y`, `rotation`, `scaleX`, `scaleY`,
+`alpha`, `visible` (and a text's `text`). These **overrides** belong to the
+instance path and replace the animated values until the instance leaves the
+stage. They exist only at runtime and are never saved.
 
 The **editor** (scrubbing, stage editing, single-frame rendering) uses the
 stateless form of the same rules: a movie clip shows `(parentFrame −
@@ -324,4 +339,5 @@ load → save is byte-stable.
 
 ## Planned changes
 
-Scripts (Phase 7) will attach to frames and symbols.
+Export options (Phase 8) may add a player settings block (scaling mode,
+autoplay), as optional fields.

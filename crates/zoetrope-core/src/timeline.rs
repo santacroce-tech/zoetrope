@@ -31,11 +31,17 @@ pub struct Keyframe {
     /// A sound that starts with this keyframe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<SoundRef>,
+    /// Frame label: a name scripts can `gotoAndPlay`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Frame script (JavaScript), run when the playhead enters this keyframe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 impl Keyframe {
     pub fn blank(duration: u32) -> Keyframe {
-        Keyframe { duration, elements: Vec::new(), tween: None, sound: None }
+        Keyframe { duration, elements: Vec::new(), tween: None, sound: None, label: None, script: None }
     }
 
     pub fn with(duration: u32, elements: Vec<Element>) -> Keyframe {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SYMBOL_DRAG_TYPE } from "../engine";
+import type { Runtime } from "../runtime/runtime";
 import type {
   DragMode,
   Engine,
@@ -62,8 +63,10 @@ interface Props {
   frame: number;
   /** Onion skin settings, or null when off. */
   onion: Onion | null;
-  /** Preview playback through the runtime player: render its state and send it the pointer. */
-  runtime: boolean;
+  /** Preview session: render the runtime's state and send it the pointer. */
+  runtime: Runtime | null;
+  /** Bumped whenever the runtime's picture may have changed. */
+  runtimeTick: number;
   /** Double-click on a symbol instance (select tool): edit it in place. */
   onEnterInstance: (id: number) => void;
   /** A library symbol dropped onto the stage. */
@@ -272,7 +275,7 @@ export function StageView(props: Props) {
 
   useEffect(() => {
     requestDraw();
-  }, [requestDraw, version, selection, props.anchors, size, props.view, stage, settings, props.tool, props.frame, props.onion, props.runtime]);
+  }, [requestDraw, version, selection, props.anchors, size, props.view, stage, settings, props.tool, props.frame, props.onion, props.runtime, props.runtimeTick]);
 
   useEffect(
     () => () => {
@@ -450,10 +453,10 @@ export function StageView(props: Props) {
 
   /** While previewing, the pointer drives buttons instead of editing. */
   const runtimePointer = (e: { clientX: number; clientY: number }, down: boolean, inside = true) => {
-    const pt = toStage(live.current.view, screenPoint(e));
-    const r = JSON.parse(engine.playPointer(pt.x, pt.y, inside, down));
-    setCursor(r?.overButton ? "pointer" : "default");
-    requestDraw();
+    const rt = live.current.props.runtime;
+    if (!rt) return;
+    const over = rt.pointer(toStage(live.current.view, screenPoint(e)), inside, down);
+    setCursor(over ? "pointer" : "default");
   };
 
   const onPointerDown = (e: React.PointerEvent) => {

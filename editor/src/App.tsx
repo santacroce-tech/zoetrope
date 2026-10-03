@@ -18,9 +18,12 @@ import {
   SYMBOL_KIND_LABEL,
 } from "./engine";
 import { LibraryPanel } from "./components/LibraryPanel";
-import { AudioEngine } from "./audio";
+import { OutputPanel } from "./components/OutputPanel";
+import { Runtime } from "./runtime/runtime";
+import type { OutputLine } from "./runtime/scripting";
 import { describeImport, importFonts } from "./assets";
-import { fileToBinary, importImages, isTauri, openProject, saveProject, type PickedBinary } from "./platform";
+import { fileToBinary, importImages, isTauri, openProject, saveHtml, saveProject, type PickedBinary } from "./platform";
+import { buildHtml } from "./export";
 import { StageView, type StageSettings, type Tool, type ToolOptions } from "./components/StageView";
 import { Timeline, type FrameOp, type OnionSettings } from "./components/Timeline";
 import { PropertiesPanel } from "./components/PropertiesPanel";
@@ -125,63 +128,66 @@ function Editor({ engine }: { engine: Engine }) {
   );
 
   // Playback at the stage fps. On the main timeline it runs the core's
-  // runtime player (movie clips keep their own clocks, buttons respond);
-  // inside a symbol it steps that symbol's timeline.
-  const [runtime, setRuntime] = useState(false);
-  const audio = useRef<AudioEngine | null>(null);
+  // runtime through a `Runtime` session (scripts, movie-clip clocks,
+  // buttons, keys, audio: exactly what the exported player does); inside a
+  // symbol it just steps that symbol's timeline.
+  const [runtime, setRuntime] = useState<Runtime | null>(null);
+  const [runtimeTick, setRuntimeTick] = useState(0);
+  const [output, setOutput] = useState<OutputLine[]>([]);
+  const [showOutput, setShowOutput] = useState(false);
+  const addOutput = useCallback((line: OutputLine) => {
+    setOutput((o) => [...o.slice(-499), line]);
+    if (line.kind === "error") setShowOutput(true);
+  }, []);
   useEffect(() => {
     if (!playing) return;
     const length = engine.timelineLength();
-    const fps = stage.fps;
     const start = frame >= length - 1 && !loop ? 0 : frame;
-    const useRuntime = engine.editDepth() === 0;
-    if (useRuntime) {
+    if (engine.editDepth() === 0) {
       goTo(start);
-      engine.playStart();
-      setRuntime(true);
+      let session: Runtime | null = null;
+      let cancelled = false;
+      Runtime.start(engine, {
+        loop,
+        onFrame: (f) => {
+          setFrameState(f);
+          setRuntimeTick((t) => t + 1);
+        },
+        onOutput: addOutput,
+        onEnd: () => setPlaying(false),
+      }).then(
+        (rt) => {
+          if (cancelled) rt.stop();
+          else {
+            session = rt;
+            setRuntime(rt);
+          }
+        },
+        (e) => {
+          setMessage({ text: `Preview failed: ${errorText(e)}`, error: true });
+          setPlaying(false);
+        },
+      );
+      return () => {
+        cancelled = true;
+        if (session) goTo(session.stop());
+        setRuntime(null);
+      };
     }
-    let t0 = 0;
-    let done = 0;
+    const fps = stage.fps;
+    const t0 = performance.now();
     let raf = 0;
-    let cancelled = false;
-    const sound = useRuntime ? (audio.current ??= new AudioEngine(engine)) : null;
     const tick = (now: number) => {
       // rAF timestamps can precede t0 (they mark the frame's start): clamp.
       let due = Math.max(0, Math.floor(((now - t0) * fps) / 1000));
       const atEnd = !loop && start + due >= length - 1;
       if (atEnd) due = length - 1 - start;
-      if (useRuntime) {
-        setFrameState(engine.playTick(due - done));
-        done = due;
-        sound?.sync(JSON.parse(engine.playAudioJson()));
-      } else {
-        goTo((start + due) % length);
-      }
+      goTo((start + due) % length);
       if (atEnd) return setPlaying(false);
       raf = requestAnimationFrame(tick);
     };
-    const begin = () => {
-      if (cancelled) return;
-      t0 = performance.now();
-      raf = requestAnimationFrame(tick);
-    };
-    // Decode the project's sounds first so the opening frames aren't silent.
-    if (sound) {
-      const ids = JSON.parse(engine.audioJson()).map((a: { id: number }) => a.id);
-      sound.preload(ids).then(begin, (e) => {
-        setMessage({ text: `Audio unavailable: ${errorText(e)}`, error: true });
-        begin();
-      });
-    } else begin();
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      sound?.stopAll();
-      if (useRuntime) {
-        goTo(engine.playStop());
-        setRuntime(false);
-      }
-    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** After entering/leaving symbol editing: reset per-timeline UI state. */
@@ -306,8 +312,21 @@ function Editor({ engine }: { engine: Engine }) {
     }
   }, [engine, changed]);
 
-  const newDemo = useCallback(() => {
-    engine.newDemo();
+  const exportHtml = useCallback(async () => {
+    const base = (filePath?.split(/[\\/]/).pop() ?? "Untitled.zoe").replace(/\.[^.]*$/, "");
+    try {
+      setMessage({ text: "Exporting…" });
+      const html = await buildHtml(engine, base);
+      const path = await saveHtml(html, `${base}.html`);
+      if (path) setMessage({ text: `Exported ${path} (${(html.length / 1048576).toFixed(1)} MB, plays offline)` });
+      else setMessage(null);
+    } catch (e) {
+      setMessage({ text: `Export failed: ${errorText(e)}`, error: true });
+    }
+  }, [engine, filePath]);
+
+  const newDemo = useCallback((kind: "animation" | "game") => {
+    engine.newDemo(kind);
     resetDocState();
     setMessage(null);
     changed();
@@ -441,6 +460,14 @@ function Editor({ engine }: { engine: Engine }) {
   keys.current = (e: KeyboardEvent) => {
     const t = e.target;
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
+    // While previewing, the keyboard belongs to the movie; Esc stops it.
+    if (playing && engine.editDepth() === 0) {
+      if (e.key === "Escape") {
+        setPlaying(false);
+        e.preventDefault();
+      }
+      return;
+    }
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
     const step = e.shiftKey ? 10 : 1;
@@ -507,11 +534,26 @@ function Editor({ engine }: { engine: Engine }) {
       <header className="toolbar">
         <span className="brand">Zoetrope</span>
         <div className="group">
-          <button onClick={() => guardUnsaved("New", newDemo)}>New demo</button>
+          <select
+            className="menu"
+            value=""
+            title="Start from a demo project"
+            onChange={(e) => {
+              const kind = e.target.value as "animation" | "game";
+              if (kind) guardUnsaved("New", () => newDemo(kind));
+            }}
+          >
+            <option value="" disabled>
+              New demo…
+            </option>
+            <option value="animation">Animation demo</option>
+            <option value="game">Game demo (scripted)</option>
+          </select>
           <button onClick={() => guardUnsaved("Open", open)} title="⌘O">Open…</button>
           <button onClick={() => save(false)} title="⌘S">Save</button>
           <button onClick={() => save(true)} title="⇧⌘S">Save as…</button>
           <button onClick={importDialog} title="⌘I — or drop images on the stage">Import…</button>
+          <button onClick={exportHtml} title="A single HTML file that plays this project offline">Export HTML…</button>
         </div>
         <div className="group">
           <button onClick={undo} disabled={!history.canUndo} title="⌘Z">
@@ -643,6 +685,7 @@ function Editor({ engine }: { engine: Engine }) {
           frame={frame}
           onion={onion.enabled && !playing ? onion : null}
           runtime={runtime}
+          runtimeTick={runtimeTick}
           onEnterInstance={enterInstance}
           onDropSymbol={(symbol, at) => {
             if (activeLayer === null) return setMessage({ text: "Select a layer first", error: true });
@@ -692,6 +735,8 @@ function Editor({ engine }: { engine: Engine }) {
         </aside>
       </main>
 
+      {showOutput && <OutputPanel lines={output} onClear={() => setOutput([])} onClose={() => setShowOutput(false)} />}
+
       <Timeline
         layers={layers}
         length={timelineLength}
@@ -737,6 +782,9 @@ function Editor({ engine }: { engine: Engine }) {
         </span>
         <span>{selection.length ? `${selection.length} selected` : ""}</span>
         <span className={message?.error ? "msg error" : "msg"}>{message?.text}</span>
+        <button className={`mini output-toggle ${output.some((l) => l.kind === "error") ? "has-errors" : ""}`} onClick={() => setShowOutput((v) => !v)} title="Script output (trace and errors)">
+          Output{output.length ? ` (${output.length})` : ""}
+        </button>
         <span className="right">
           render {renderMs.toFixed(2)} ms · {isTauri ? "Tauri" : "browser"} · WASM core
         </span>
