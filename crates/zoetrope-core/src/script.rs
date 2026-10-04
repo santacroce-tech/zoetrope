@@ -159,3 +159,20 @@ pub fn frame_script_location(p: &Project, symbol: SymbolId, layer: LayerId, fram
     let layer = p.layer(layer).map_or("?", |l| l.name.as_str());
     format!("{sym} › {layer} › frame {}", frame + 1)
 }
+
+/// What a script on `symbol`'s timeline can refer to by name, for the
+/// script editor's autocomplete: instance names (any layer, any frame) and
+/// frame labels, each sorted and without duplicates.
+pub fn names_in(p: &Project, symbol: SymbolId) -> (Vec<String>, Vec<String>) {
+    let mut names = std::collections::BTreeSet::new();
+    let mut labels = std::collections::BTreeSet::new();
+    if let Some(s) = p.symbol(symbol) {
+        walk_layers(&s.layers, &mut |l| {
+            for k in &l.keyframes {
+                names.extend(k.elements.iter().filter(|e| !e.name.is_empty()).map(|e| e.name.clone()));
+                labels.extend(k.label.iter().filter(|l| !l.is_empty()).cloned());
+            }
+        });
+    }
+    (names.into_iter().collect(), labels.into_iter().collect())
+}

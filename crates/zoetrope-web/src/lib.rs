@@ -681,6 +681,16 @@ impl Engine {
         ops::set_symbol_script(&mut self.doc, SymbolId(symbol), script.as_deref()).map_err(js_err)
     }
 
+    /// `{ names, labels }` a script can use on `symbol`'s timeline (the
+    /// timeline being edited when `null`): instance names and frame labels.
+    #[wasm_bindgen(js_name = scriptNamesJson)]
+    pub fn script_names_json(&self, symbol: Option<u32>) -> String {
+        let p = &self.doc.project;
+        let symbol = symbol.map(SymbolId).unwrap_or_else(|| self.levels.last().map_or(p.root, |l| l.symbol));
+        let (names, labels) = zoetrope_core::script::names_in(p, symbol);
+        serde_json::json!({ "names": names, "labels": labels }).to_string()
+    }
+
     /// `null` or the symbol's script.
     #[wasm_bindgen(js_name = symbolScript)]
     pub fn symbol_script(&self, symbol: u32) -> Option<String> {
