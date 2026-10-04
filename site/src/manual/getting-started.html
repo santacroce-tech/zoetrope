@@ -1,0 +1,62 @@
+<!-- title: Getting started
+     description: Install Zoetrope on macOS, Windows or Linux, or use the web editor, and take a tour of the editor. -->
+<h1>Getting started</h1>
+<p class="lede">Zoetrope runs as a desktop app on macOS, Windows and Linux, and as a web app in any modern browser. Both are the same editor.</p>
+
+<h2 id="install">Install</h2>
+<p>Download the file for your system from the <a href="{{root}}#download">download section</a> (or the <a href="{{repo}}/releases/latest">latest release</a>).</p>
+
+<h3>macOS</h3>
+<ol class="steps">
+  <li>Open the <code>.dmg</code> and drag <b>Zoetrope</b> into <b>Applications</b>. It is one universal app for Apple Silicon and Intel Macs.</li>
+  <li>The first time, <b>right-click</b> (or Control-click) Zoetrope in Applications and choose <b>Open</b>, then <b>Open</b> again. The app isn't notarized by Apple yet, so a plain double-click is refused once.</li>
+</ol>
+<div class="note">If macOS says the app "is damaged", it was quarantined by the download. Run <code>xattr -dr com.apple.quarantine /Applications/Zoetrope.app</code> in Terminal, then open it normally.</div>
+
+<h3>Windows</h3>
+<ol class="steps">
+  <li>Run <code>Zoetrope_…_x64-setup.exe</code> (or the <code>.msi</code> if you deploy with Group Policy).</li>
+  <li>If SmartScreen shows "Windows protected your PC", click <b>More info</b> → <b>Run anyway</b>. The installer isn't code-signed yet.</li>
+  <li>The installer adds Microsoft Edge WebView2 if your system doesn't have it (Windows 11 always does).</li>
+</ol>
+
+<h3>Linux</h3>
+<p>Zoetrope needs WebKitGTK 4.1, which ships with Ubuntu 22.04+, Debian 12+, Fedora 37+ and similar.</p>
+<ul>
+  <li><b>AppImage</b> (any distribution): <code>chmod +x Zoetrope_*.AppImage</code> then run it. Some systems need <code>libfuse2</code> first (<code>sudo apt install libfuse2</code>).</li>
+  <li><b>Debian/Ubuntu</b>: <code>sudo apt install ./Zoetrope_*_amd64.deb</code></li>
+  <li><b>Fedora/openSUSE</b>: <code>sudo dnf install ./Zoetrope-*.x86_64.rpm</code></li>
+</ul>
+
+<h3>The web editor</h3>
+<p>Open <a href="{{root}}app/">the web editor</a> in Chrome, Edge, Firefox or Safari 16.4+. Nothing is installed, and nothing is uploaded anywhere: your project stays in the browser. The differences from the desktop app:</p>
+<ul>
+  <li><b>Save</b> downloads a <code>.zoe</code> file and <b>Open</b> asks you to pick one. There's no recent-files list.</li>
+  <li>Autosave and preferences are kept in the browser's storage for this site.</li>
+  <li>Exports download to your Downloads folder (a folder export downloads three files).</li>
+</ul>
+
+<h2>A tour of the editor</h2>
+<figure>
+  <img src="{{root}}assets/img/editor.webp" alt="The Zoetrope editor with the animation demo open and a flower selected" width="1440" height="900">
+  <figcaption>The editor with the animation demo open and a flower instance selected.</figcaption>
+</figure>
+<table>
+  <tr><th>Area</th><th>What it's for</th></tr>
+  <tr><td><b>Toolbar</b> (top)</td><td><b>New…</b> (blank project or a demo), <b>Open…</b>, <b>Save</b>, <b>Import…</b> (images), <b>Export…</b>, <b>Recent…</b> (desktop), <b>⚙</b> preferences, <b>?</b> shortcuts, then undo/redo, grid and snapping, rulers, guides and zoom. When a tool has options (polygon sides, pencil mode, text style), they appear here too.</td></tr>
+  <tr><td><b>Tools</b> (left)</td><td>Selection, subselection, pen, pencil, rectangle, ellipse, polygon/star, line, text, gradient transform, eyedropper, paint bucket and hand. Below them, the fill and stroke used for new shapes.</td></tr>
+  <tr><td><b>Stage</b> (center)</td><td>What you're making. The white rectangle is the visible area; the darker pasteboard around it holds off-stage content. Rulers show stage coordinates; the status bar shows the cursor position.</td></tr>
+  <tr><td><b>Properties</b> (right, top)</td><td>Changes with what you select: the stage, an object (position, size, transform, opacity, blend, tint, fill and stroke, align), a text, a symbol instance, or a frame (tween, easing, label, script, sound).</td></tr>
+  <tr><td><b>Library</b> (right, bottom)</td><td>Your symbols. Drag one onto the stage to place an instance; double-click to edit it.</td></tr>
+  <tr><td><b>Timeline</b> (bottom)</td><td>Layers on the left, frames on the right. Play, step, onion skin, insert frames and keyframes, add tweens, add layers and folders.</td></tr>
+  <tr><td><b>Status bar</b></td><td>File name (• means unsaved changes), stage size, cursor position, current frame, messages and errors, the <b>Output</b> panel for scripts, and how long the last frame took to draw.</td></tr>
+</table>
+
+<h2>Projects and files</h2>
+<ul>
+  <li>A project is one <code>.zoe</code> file. Images, fonts and sounds you import are embedded in it, so you can move or share the file on its own.</li>
+  <li>Zoetrope <b>autosaves</b> unsaved work every 30 seconds (change it in <b>⚙ Preferences</b>). If the app quits or crashes before you save, it offers the work back the next time it starts.</li>
+  <li>Every change can be undone (<kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd>), including timeline, symbol and script changes.</li>
+</ul>
+
+<p>Next: <a href="first-animation.html">make your first animation</a>.</p>

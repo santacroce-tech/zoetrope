@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "player": "vite build --config vite.player.config.ts --logLevel warn",
     "test": "npm run test:build && node --test \"tests/dist/*.test.mjs\"",
-    "test:build": "esbuild tests/*.test.ts --bundle --platform=node --format=esm --target=node20 --outdir=tests/dist --out-extension:.js=.mjs --log-level=warning"
+    "test:build": "esbuild tests/*.test.ts --bundle --platform=node --format=esm --target=node20 --outdir=tests/dist --out-extension:.js=.mjs --log-level=warning",
+    "export-demos": "esbuild tools/export-demos.ts --bundle --platform=node --format=esm --target=node20 --outfile=tools/dist/export-demos.mjs --log-level=warning && node tools/dist/export-demos.mjs"
   },
   "dependencies": {
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
@@ -22,11 +23,12 @@
     "react-dom": "^19"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.12.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
+    "esbuild": "0.28.2",
     "typescript": "^5",
-    "vite": "^7",
-    "esbuild": "0.28.2"
+    "vite": "^7"
   }
 }

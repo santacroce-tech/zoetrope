@@ -1,0 +1,40 @@
+<!-- title: Exporting
+     description: Publish a project as a single offline HTML file or a folder for the web; scaling, start on click, embedding and hosting. -->
+<h1>Exporting</h1>
+<p class="lede"><b>Export…</b> turns your project into a web page that plays in any modern browser, on desktop and mobile, with no plugin and no install. It plays exactly like the preview, frame for frame.</p>
+<figure><img src="{{root}}assets/img/export.webp" alt="The export dialog with title, format, scaling, page color, start on click and the embed snippet" loading="lazy"></figure>
+
+<h2>Formats</h2>
+<table>
+  <tr><th>Format</th><th>You get</th><th>Best for</th></tr>
+  <tr><td><b>Single HTML file</b></td><td><code>Title.html</code>: the player, your project and every asset in one file. It works offline, even opened straight from disk.</td><td>Sharing by email or chat, offline kiosks, most projects.</td></tr>
+  <tr><td><b>Folder</b></td><td><code>Title.html</code>, <code>zoetrope-player.js</code> (the same file for every export, so browsers cache it) and <code>Title.zoepack</code> (your project and assets, compressed).</td><td>Large projects and sites with several movies. Must be served over http(s); browsers block it from <code>file://</code>.</td></tr>
+</table>
+<p>A typical single-file export is about 1.5 MB, most of which is the player (the animation engine and the script engine). Your assets add their own size.</p>
+
+<h2>Options</h2>
+<ul>
+  <li><b>Title</b>: the page title and file name.</li>
+  <li><b>Scaling</b>:
+    <ul>
+      <li><i>Letterbox</i> shows the whole stage as large as the window allows, with bars around it.</li>
+      <li><i>Fill</i> covers the window and crops what sticks out.</li>
+      <li><i>Fixed size</i> shows stage pixels 1:1, centered; it's best inside an iframe of the stage's size.</li>
+    </ul></li>
+  <li><b>Page color</b>: the color of the bars and margins.</li>
+  <li><b>Start on click</b>: shows the first frame with a ▶ button. Use it when the movie has sound, because browsers only allow audio after a click.</li>
+</ul>
+<p>These settings are saved with the project, so the next export uses them again.</p>
+
+<h2>Embedding in a website</h2>
+<p>The dialog shows an <b>embed snippet</b>, an <code>&lt;iframe&gt;</code> sized to your stage that shrinks on narrow screens and keeps its proportions:</p>
+<pre><code>&lt;iframe src="Bee%20Catcher.html" width="960" height="540" title="Bee Catcher"
+  style="border:0; max-width:100%; aspect-ratio:960 / 540; height:auto"
+  allow="autoplay; fullscreen" allowfullscreen&gt;&lt;/iframe&gt;</code></pre>
+<p>Upload the exported file(s) next to your page, paste the snippet, and you're done. The live demos on <a href="{{root}}#demos">this site's home page</a> are embedded exactly this way.</p>
+
+<h2>Hosting</h2>
+<p>Exports are static files: any web host works, including GitHub Pages, Netlify, an S3 bucket or your own server. No server-side code is needed. Keyboard input reaches the movie after the viewer clicks it.</p>
+
+<h2>What's inside</h2>
+<p>The page runs the same WebAssembly core and the same runtime as the editor's preview, so tweens, nested movie clips, text, sound and scripts behave identically. Zoetrope verifies this on every release by comparing frame-by-frame fingerprints of the preview and the exported page. The details are in <a href="{{repo}}/blob/main/docs/EXPORT.md">docs/EXPORT.md</a>.</p>

@@ -1,0 +1,52 @@
+<!-- title: Scripting
+     description: Make projects interactive with JavaScript: frame and symbol scripts, display objects, events, the keyboard and pointer, and the sandbox. -->
+<h1>Scripting</h1>
+<p class="lede">Scripts are modern JavaScript with a small, Flash-like API. They run the same way in the preview and in exported pages, in a sandbox that keeps your project and the viewer safe.</p>
+<figure><img src="{{root}}assets/img/script.webp" alt="The Bee Catcher frame script in the large script editor" loading="lazy"></figure>
+
+<h2>Where scripts go</h2>
+<table>
+  <tr><th>Kind</th><th>Attach it…</th><th>It runs…</th><th><code>this</code> is…</th></tr>
+  <tr><td><b>Frame script</b></td><td>Click a keyframe, then <b>Label &amp; script</b> in Properties (⤢ opens a large editor).</td><td>each time the playhead enters that keyframe</td><td>the timeline (the main timeline, or the movie clip)</td></tr>
+  <tr><td><b>Symbol script</b></td><td>Select a symbol in the Library and click <b>{ }</b>.</td><td>once for every instance, when it appears</td><td>the instance</td></tr>
+</table>
+<p>In the script editor, <kbd>Tab</kbd> indents, <kbd>⌘↵</kbd> / <kbd>Ctrl+Enter</kbd> or <b>Apply</b> applies (one undo step), and <kbd>Esc</kbd> reverts unapplied edits.</p>
+
+<h2>Names and scope</h2>
+<p>Give objects an <b>instance name</b> in Properties, and use it directly. Free names resolve against the timeline, as in Flash:</p>
+<pre><code>stop();                    // this timeline
+bee.x = 200;               // the child named "bee"
+title.text = "Hello";      // a named text
+var lives = 3;             // becomes this.lives, shared by this timeline's scripts
+let local = 1;             // stays local to this script</code></pre>
+
+<h2>Display objects</h2>
+<table>
+  <tr><th>Member</th><th>Notes</th></tr>
+  <tr><td><code>x</code>, <code>y</code>, <code>rotation</code>, <code>scaleX</code>, <code>scaleY</code>, <code>alpha</code>, <code>visible</code></td><td>Read and write. Writing takes that property over from the timeline.</td></tr>
+  <tr><td><code>text</code></td><td>Text objects only.</td></tr>
+  <tr><td><code>currentFrame</code>, <code>totalFrames</code>, <code>isPlaying</code></td><td>The main timeline and movie clips. Frames count from 1.</td></tr>
+  <tr><td><code>play()</code>, <code>stop()</code>, <code>gotoAndPlay(f)</code>, <code>gotoAndStop(f)</code>, <code>nextFrame()</code>, <code>prevFrame()</code></td><td><code>f</code> is a frame number or a frame label.</td></tr>
+  <tr><td><code>hitTestObject(other)</code>, <code>hitTestPoint(x, y, shape)</code>, <code>getBounds()</code></td><td>Collisions and bounds in stage coordinates.</td></tr>
+  <tr><td><code>name</code>, <code>kind</code>, <code>parent</code>, <code>root</code>, <code>getChildByName(n)</code>, <code>getChildren()</code></td><td>Finding your way around.</td></tr>
+</table>
+
+<h2>Events</h2>
+<pre><code>this.onEnterFrame = function () { … };          // every frame
+playButton.onClick = function () { play(); };    // buttons: onPress, onRelease, onClick
+stage.addEventListener("keyDown", function (e) { trace(e.key); });
+if (Key.isDown("ArrowLeft")) { … }               // keyboard state
+trace(Mouse.x, Mouse.y);                         // pointer, in stage coordinates</code></pre>
+<p>Stage events are <code>enterFrame</code>, <code>keyDown</code>, <code>keyUp</code>, <code>mouseDown</code>, <code>mouseUp</code>, <code>mouseMove</code> and <code>click</code>. Within a frame, the order is: timelines advance, new instances run their symbol scripts, entered frames run their frame scripts, then <code>onEnterFrame</code> handlers run.</p>
+
+<h2>Debugging</h2>
+<ul>
+  <li><code>trace(…)</code> prints to the <b>Output</b> panel (status bar → Output). In exported pages it goes to the browser console.</li>
+  <li>Errors show their location and line, e.g. <i>Scene 1 › Actions › frame 1: TypeError: not a function (line 5)</i>. The movie keeps running.</li>
+  <li><code>Math.random()</code> is seeded per session, which makes tests and comparisons repeatable.</li>
+</ul>
+
+<h2>The sandbox</h2>
+<p>Scripts run in a separate JavaScript engine (QuickJS, compiled to WebAssembly) with no access to the page, the network or files: there's no <code>window</code>, <code>document</code>, <code>fetch</code> or <code>setTimeout</code>. Count frames in <code>onEnterFrame</code> for timing. Each script entry may run for 250 ms, and memory is capped at 64 MB, so an endless loop is stopped and reported instead of freezing the app.</p>
+
+<p>The complete reference, with every property, the exact timing rules and more examples, is in <a href="{{repo}}/blob/main/docs/SCRIPTING.md">docs/SCRIPTING.md</a>.</p>

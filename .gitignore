@@ -9,3 +9,5 @@ node_modules
 *.tsbuildinfo
 /editor/player-dist
 /editor/tests/dist
+/editor/tools/dist
+/site/dist

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:image" content="{{root}}assets/img/editor.webp">
+<link rel="icon" href="{{root}}assets/icon.png">
+<link rel="stylesheet" href="{{root}}assets/style.css">
+<script defer src="{{root}}assets/site.js"></script>
+</head>
+<body class="page-{{kind}}">
+<header class="top">
+  <a class="brand" href="{{root}}"><img src="{{root}}assets/icon.png" alt="" width="28" height="28"> Zoetrope</a>
+  <nav class="links">
+    <a href="{{root}}#features">Features</a>
+    <a href="{{root}}#demos">Demos</a>
+    <a href="{{root}}manual/">Manual</a>
+    <a href="{{root}}#download">Download</a>
+    <a href="{{repo}}">GitHub</a>
+  </nav>
+</header>
+<main>
+{{content}}
+</main>
+<footer class="bottom">
+  <p>Zoetrope is open source under the <a href="{{repo}}/blob/main/LICENSE">MIT license</a>. Built with Rust, WebAssembly, Tauri and React.</p>
+  <p><a href="{{repo}}">Source</a> · <a href="{{repo}}/releases">Releases</a> · <a href="{{root}}manual/">Manual</a> · <a href="{{repo}}/blob/main/docs/SCRIPTING.md">Scripting API</a> · <a href="{{repo}}/blob/main/docs/FORMAT.md">File format</a> · <a href="{{repo}}/issues">Report a problem</a></p>
+</footer>
+</body>
+</html>

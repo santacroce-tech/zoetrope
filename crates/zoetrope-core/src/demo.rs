@@ -78,6 +78,26 @@ fn cloud() -> VectorPath {
     )
 }
 
+/// An empty project: a 960×540 stage at 24 fps with one empty layer.
+pub fn blank_project() -> Project {
+    let mut b = Builder {
+        project: Project {
+            next_id: 1,
+            stage: Stage { width: 960.0, height: 540.0, background: Color::WHITE, fps: 24.0 },
+            root: SymbolId(0),
+            symbols: Vec::new(),
+            assets: Vec::new(),
+            publish: None,
+        },
+    };
+    let scene = b.symbol("Scene 1", SymbolKind::MovieClip);
+    b.project.root = scene;
+    let layer = b.layer(Parent::Symbol(scene), "Layer 1", LayerKind::Normal);
+    b.project.layer_mut(layer).unwrap().keyframes = vec![Keyframe::blank(1)];
+    debug_assert!(b.project.validate().is_ok());
+    b.project
+}
+
 pub fn demo_project() -> Project {
     let mut b = Builder {
         project: Project {

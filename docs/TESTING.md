@@ -9,7 +9,7 @@ at the first failure.
 | Lints | `cargo clippy … -D warnings`, native and `wasm32` | Rust code quality, including the WASM-only renderer |
 | Core tests | `cargo test --workspace` | See below |
 | Build | `npm run wasm` | Core → WASM (`scripts/build-wasm.sh`), then the player bundle |
-| Typecheck | `npx tsc -b` | The editor, runtime, player and tests |
+| Typecheck | `npx tsc -b` | The editor, runtime and player (tests and tools are type-stripped by esbuild) |
 | Runtime tests | `npm test` (in `editor/`) | See below |
 | Editor build | `npx vite build` | The production frontend |
 

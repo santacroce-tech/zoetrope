@@ -426,7 +426,7 @@ function Editor({ engine }: { engine: Engine }) {
   const [exporting, setExporting] = useState(false);
   const exportTitle = (filePath?.split(/[\\/]/).pop() ?? "Untitled.zoe").replace(/\.[^.]*$/, "");
 
-  const newDemo = useCallback((kind: "animation" | "game" | "stress") => {
+  const newDemo = useCallback((kind: "blank" | "animation" | "game" | "stress") => {
     engine.newDemo(kind);
     void clearAutosave().catch(() => {});
     resetDocState();
@@ -640,15 +640,16 @@ function Editor({ engine }: { engine: Engine }) {
           <select
             className="menu"
             value=""
-            title="Start from a demo project"
+            title="New blank project, or start from a demo"
             onChange={(e) => {
-              const kind = e.target.value as "animation" | "game" | "stress";
+              const kind = e.target.value as "blank" | "animation" | "game" | "stress";
               if (kind) guardUnsaved("New", () => newDemo(kind));
             }}
           >
             <option value="" disabled>
-              New demo…
+              New…
             </option>
+            <option value="blank">Blank project</option>
             <option value="animation">Animation demo</option>
             <option value="game">Game demo (scripted)</option>
             <option value="stress">Stress test (1000 flowers)</option>

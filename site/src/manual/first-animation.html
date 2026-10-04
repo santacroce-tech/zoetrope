@@ -1,0 +1,64 @@
+<!-- title: Tutorial: your first animation
+     description: Draw a ball, turn it into a symbol and animate it across the stage with an eased motion tween. -->
+<h1>Tutorial: your first animation</h1>
+<p class="lede">In about ten minutes you'll draw a ball, make it a symbol, animate it across the stage with a motion tween, give it a smooth ease, and export it as a web page.</p>
+
+<h2>1. Start a blank project</h2>
+<p>Choose <b>New… → Blank project</b> in the toolbar. You get a white 960 × 540 stage at 24 frames per second, with one layer called <i>Layer 1</i> that is one frame long. (Change the size, frame rate or background color in <b>Properties</b> while nothing is selected.)</p>
+
+<h2>2. Draw a ball</h2>
+<ol class="steps">
+  <li>Pick the <b>Ellipse</b> tool (<kbd>O</kbd>).</li>
+  <li>Choose a fill color with the <b>Fill</b> swatch under the tools, and a stroke with the <b>Stroke</b> swatch (or click <b>⌀</b> for none).</li>
+  <li>Hold <kbd>Shift</kbd> and drag on the left of the stage to draw a circle. Shift keeps it round; <kbd>Alt</kbd>/<kbd>Option</kbd> draws from the center.</li>
+</ol>
+<figure><img src="{{root}}assets/img/tut1-draw.webp" alt="A pink circle drawn on the left of the stage" loading="lazy"></figure>
+
+<h2>3. Make it a symbol</h2>
+<p>Tweens animate <b>symbol instances</b>: reusable objects with their own timeline, a bit like components.</p>
+<ol class="steps">
+  <li>Switch to the <b>Selection</b> tool (<kbd>V</kbd>) and click the ball.</li>
+  <li>Press <kbd>F8</kbd> (Convert to symbol). Name it <b>Ball</b>, choose <b>Graphic</b> and click <b>Convert</b>.</li>
+</ol>
+<figure><img src="{{root}}assets/img/tut1-symbol.webp" alt="The Convert to symbol dialog with the name Ball and Graphic selected" loading="lazy"></figure>
+<p><b>Ball</b> now appears in the <b>Library</b>, and the object on stage is an instance of it.</p>
+
+<h2>4. Add a keyframe at frame 24</h2>
+<ol class="steps">
+  <li>In the timeline, click the cell for <b>frame 24</b> on <i>Layer 1</i> (the ruler above the cells shows frame numbers).</li>
+  <li>Press <kbd>F6</kbd> (Insert keyframe). The layer now spans 24 frames: a keyframe at 1, and a new keyframe at 24 holding a copy of the ball.</li>
+  <li>With the playhead on frame 24, drag the ball to the right side of the stage.</li>
+</ol>
+
+<h2>5. Add a motion tween</h2>
+<ol class="steps">
+  <li>Click any frame between 1 and 23 on <i>Layer 1</i>.</li>
+  <li>Click <b>Motion tween</b> in the timeline bar. The span turns purple with an arrow: Zoetrope now interpolates the ball between the two keyframes.</li>
+  <li>Scrub the playhead (click frames, or press <kbd>,</kbd> and <kbd>.</kbd>) to see the ball move.</li>
+</ol>
+<figure><img src="{{root}}assets/img/tut1-tween.webp" alt="The timeline shows a purple tween span with an arrow; the ball is halfway across the stage at frame 10" loading="lazy"></figure>
+
+<h2>6. Ease it</h2>
+<p>A linear tween looks mechanical. With a tweened frame selected, the <b>Properties</b> panel shows the tween's settings.</p>
+<ol class="steps">
+  <li>Under <b>Easing</b>, choose <b>In Out Sine</b>: the ball starts slowly, speeds up, and settles gently. The curve shows progress (up) over time (right).</li>
+  <li>Choose <b>Custom (bezier)</b> to drag the curve's handles yourself, or try <b>Out Bounce</b> or <b>Out Elastic</b> for something livelier.</li>
+  <li>Turn on <b>Onion</b> in the timeline bar to see faded copies of the frames before (blue) and after (green) the current one. The numbers next to it set how many.</li>
+</ol>
+<figure><img src="{{root}}assets/img/tut1-easing.webp" alt="Onion skinning shows the ball's positions bunched up at the start and end of the eased tween" loading="lazy"></figure>
+
+<h2>7. Preview, save and share</h2>
+<ol class="steps">
+  <li>Press <kbd>Enter</kbd> (or ▶) to play. Toggle the loop button next to the transport to loop or stop at the end. Press <kbd>Esc</kbd> to stop.</li>
+  <li>Press <kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd> to save your project as a <code>.zoe</code> file.</li>
+  <li>Click <b>Export…</b>, give it a title, keep <b>Single HTML file</b>, and export. Open the HTML file in any browser: that's your animation, ready to email, host or embed.</li>
+</ol>
+
+<h2>Going further</h2>
+<ul>
+  <li>Add <b>Spins</b> in the tween's properties to rotate the ball as it travels.</li>
+  <li>Scale or recolor the ball at frame 24 (<b>Appearance → Tint</b>). Motion tweens interpolate position, scale, rotation, skew, opacity and tint.</li>
+  <li>Use a <b>Shape tween</b> on raw shapes (not symbols) to morph one shape into another. See <a href="timeline.html">Timeline and tweens</a>.</li>
+  <li>Make the ball a <b>Movie clip</b> with its own animation inside, such as a squash on landing. See <a href="symbols.html">Symbols</a>.</li>
+</ul>
+<p>Next: <a href="first-game.html">make it interactive</a>.</p>
