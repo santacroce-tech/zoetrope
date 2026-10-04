@@ -201,6 +201,11 @@ impl Edit {
             }
             Edit::InsertLayer { symbol, parent, index, layer } => {
                 check_new_layer(p, symbol, &layer)?;
+                if let Some(pid) = parent {
+                    if p.layer(pid).is_some_and(|m| m.is_mask()) && layer.holds_layers() {
+                        return Err(Error::Invalid("a mask can only mask normal and guide layers".into()));
+                    }
+                }
                 let list = p.layer_list_mut(symbol, parent)?;
                 if index > list.len() {
                     return Err(Error::Invalid(format!("layer index {index} out of range")));
@@ -215,9 +220,18 @@ impl Edit {
                 Ok(Edit::InsertLayer { symbol: loc.symbol, parent: loc.parent, index: loc.index, layer: removed })
             }
             Edit::SetLayerProps { layer, props } => {
+                if props.kind == LayerKind::Mask {
+                    let parent = p.locate_layer(layer).and_then(|loc| loc.parent);
+                    if parent.and_then(|pid| p.layer(pid)).is_some_and(|m| m.is_mask()) {
+                        return Err(Error::Invalid("a layer inside a mask can't be a mask itself".into()));
+                    }
+                }
                 let l = p.layer_mut(layer).ok_or_else(|| layer_not_found(layer))?;
                 if (props.kind == LayerKind::Folder) != l.is_folder() {
                     return Err(Error::Invalid("cannot convert between folders and layers".into()));
+                }
+                if props.kind != LayerKind::Mask && l.is_mask() && !l.children.is_empty() {
+                    return Err(Error::Invalid("move the masked layers out of the mask first".into()));
                 }
                 let old = LayerProps::of(l);
                 l.name = props.name;
@@ -329,8 +343,10 @@ fn check_new_layer(p: &Project, symbol: SymbolId, layer: &Layer) -> Result<()> {
             result = Err(Error::Invalid(format!("layer id {} is not fresh", l.id.0)));
         } else if l.is_folder() && !l.keyframes.is_empty() {
             result = Err(Error::Invalid("folders cannot hold keyframes".into()));
-        } else if !l.is_folder() && !l.children.is_empty() {
-            result = Err(Error::Invalid("only folders can hold layers".into()));
+        } else if !l.holds_layers() && !l.children.is_empty() {
+            result = Err(Error::Invalid("only folders and masks can hold layers".into()));
+        } else if l.is_mask() && l.children.iter().any(|c| c.holds_layers()) {
+            result = Err(Error::Invalid("a mask can only mask normal and guide layers".into()));
         } else if let Err(e) = check_keyframes(l) {
             result = Err(e);
         }

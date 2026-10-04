@@ -20,7 +20,7 @@ at the first failure.
 - **Integration tests** are in `tests/core.rs`. They are grouped by phase;
   the main areas are:
   - **Serialization:** every demo round-trips through JSON and the pack
-    format. Migrations from v1 fixtures up to v6 are covered, damaged or
+    format. Migrations from v1 fixtures up to v7 are covered, damaged or
     newer files are rejected, and validation errors are readable.
   - **Undo:** each operation is undoable and atomic.
     `random_edit_sequences_undo_and_redo_exactly` runs 4 seeds × 300 random

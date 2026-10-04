@@ -1,5 +1,5 @@
 <!-- title: Timeline and tweens
-     description: Layers and folders, frames and keyframes, motion and shape tweens, easing, onion skinning and frame labels. -->
+     description: Layers, folders and masks, frames and keyframes, motion and shape tweens, easing, onion skinning and frame labels. -->
 <h1>Timeline and tweens</h1>
 <p class="lede">The timeline is where things change over time. Each row is a layer; each cell is a frame; a filled dot is a keyframe.</p>
 <figure><img src="{{root}}assets/img/timeline.webp" alt="The timeline with several layers, a tween span on the Sky layer and onion skinning on" loading="lazy"></figure>
@@ -10,6 +10,7 @@
   <li>Double-click a name to rename it. Drag rows to reorder them or drop them into folders. Higher rows draw on top.</li>
   <li>The eye hides a layer; the dot locks it so you can't select its objects by accident.</li>
   <li><b>Guide</b> turns a layer into a guide layer. It's visible while editing, for sketches and layout lines, but is never exported.</li>
+  <li><b>Mask</b> turns a layer into a mask (◪): the layer below moves inside it and shows only where the mask's shapes are, like looking through a cut-out. Drag more layers into the mask to mask them too, or out to release them. While the mask is unlocked you see and edit its shapes; <b>lock</b> it to see the effect. Exports always show it masked. Fills, text and bitmaps (as rectangles) count; strokes don't, and the mask's shapes can be animated with tweens for reveals and spotlights. Click <b>Mask</b> again to turn it back into a normal layer.</li>
 </ul>
 
 <h2>Frames and keyframes</h2>

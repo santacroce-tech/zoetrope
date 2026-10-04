@@ -43,7 +43,12 @@ const OPTS: ShapeOptions = ShapeOptions { sides: 5, star: None };
 
 fn render_with(p: &Project, show_guides: bool) -> Vec<DrawOp> {
     let mut r = RecordingRenderer::default();
-    render_frame(p, 0, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides, onion: None }, &mut r);
+    render_frame(
+        p,
+        0,
+        RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides, onion: None, edit_masks: false },
+        &mut r,
+    );
     r.ops
 }
 
@@ -1348,7 +1353,7 @@ fn edit_in_place_view_dims_context_and_skips_the_instance() {
     render_editing(
         &p,
         &view,
-        RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: true, onion: None },
+        RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: true, onion: None, edit_masks: false },
         &mut r,
     );
     assert!(matches!(r.ops[1], DrawOp::BeginGroup { alpha, .. } if alpha == 0.3));
@@ -1856,7 +1861,11 @@ fn random_op(doc: &mut Document, rng: &mut Rng) -> zoetrope_core::Result<()> {
     let layer = rng.pick(&layers).unwrap_or(LayerId(0));
     let symbols: Vec<SymbolId> = p.symbols.iter().map(|s| s.id).filter(|s| *s != p.root).collect();
     let pt = Point::new(rng.range(0.0, 900.0), rng.range(0.0, 500.0));
-    match rng.below(28) {
+    match rng.below(30) {
+        28 | 29 => {
+            let kind = [LayerKind::Mask, LayerKind::Normal][rng.below(2)];
+            ops::set_layer_props(doc, layer, &LayerPatch { kind: Some(kind), ..Default::default() })
+        }
         26 | 27 => {
             // Copy an element and paste it somewhere (maybe another layer or frame).
             let clip = zoetrope_core::clipboard::copy(&doc.project, &[el])?;
@@ -2098,4 +2107,116 @@ fn clipboard_text_is_recognized_and_checked() {
     let before = doc.project.clone();
     assert!(clipboard::paste(&mut doc, ui, 0, &clip, 0.0, 0.0).is_err());
     assert_eq!(doc.project, before);
+}
+
+// ---------------------------------------------------------------- v0.2: mask layers
+
+fn render_opts(edit_masks: bool) -> RenderOptions {
+    RenderOptions { edit_masks, ..RenderOptions::player(Matrix::IDENTITY) }
+}
+
+fn ops_with(p: &Project, edit_masks: bool) -> Vec<DrawOp> {
+    let mut r = RecordingRenderer::default();
+    render_frame(p, 0, render_opts(edit_masks), &mut r);
+    r.ops
+}
+
+/// The demo with a mask layer (a 200×540 rectangle on the left) right above "Flowers".
+fn masked_demo() -> (Document, LayerId, LayerId) {
+    let mut doc = Document::new(demo_project());
+    let flowers = layer_named(&doc.project, "Flowers");
+    let root = doc.project.root;
+    let mask = ops::add_layer(&mut doc, root, Some(flowers), LayerKind::Normal).unwrap();
+    let s = style(Some(Color::rgb(1, 2, 3)), None);
+    ops::create_shape(
+        &mut doc,
+        mask,
+        ShapeTool::Rect,
+        Point::new(0.0, 0.0),
+        Point::new(200.0, 540.0),
+        Modifiers::default(),
+        &ShapeOptions::default(),
+        &s,
+        0,
+    )
+    .unwrap();
+    ops::set_layer_props(&mut doc, mask, &LayerPatch { kind: Some(LayerKind::Mask), ..Default::default() }).unwrap();
+    (doc, mask, flowers)
+}
+
+#[test]
+fn mask_layers_clip_the_layers_they_hold() {
+    let (doc, mask, flowers) = masked_demo();
+    let m = doc.project.layer(mask).unwrap();
+    assert_eq!(m.kind, LayerKind::Mask);
+    assert_eq!(m.children.iter().map(|c| c.id).collect::<Vec<_>>(), vec![flowers], "the layer below became masked");
+    assert_eq!(doc.undo_label(), Some("Mask"));
+
+    // Player: the flowers are drawn inside a clip made of the mask's rectangle,
+    // and the mask's own fill isn't drawn.
+    let ops_ = ops_with(&doc.project, false);
+    let begin = ops_.iter().position(|o| matches!(o, DrawOp::BeginClip { .. })).expect("a clip");
+    let end = ops_.iter().position(|o| matches!(o, DrawOp::EndClip)).unwrap();
+    let DrawOp::BeginClip { paths } = &ops_[begin] else { unreachable!() };
+    assert_eq!(paths.len(), 1, "one filled shape in the mask");
+    assert_eq!(pink_fills(&doc.project), 18, "flowers still drawn (clipped)");
+    let inside = ops_[begin..end]
+        .iter()
+        .filter(|o| matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, .. } if *color == Color::rgb(0xe8, 0x6a, 0x92)))
+        .count();
+    assert_eq!(inside, 18, "all petals are inside the clip");
+    assert!(
+        !ops_.iter().any(|o| matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, .. } if *color == Color::rgb(1, 2, 3))),
+        "the mask isn't drawn"
+    );
+
+    // Editor, unlocked mask: no clipping, the mask shape is visible to edit.
+    let editing = ops_with(&doc.project, true);
+    assert!(!editing.iter().any(|o| matches!(o, DrawOp::BeginClip { .. })));
+    assert!(editing
+        .iter()
+        .any(|o| matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, .. } if *color == Color::rgb(1, 2, 3))));
+    // Locked: the editor shows the masked result.
+    let mut doc = doc;
+    ops::set_layer_props(&mut doc, mask, &LayerPatch { locked: Some(true), ..Default::default() }).unwrap();
+    assert!(ops_with(&doc.project, true).iter().any(|o| matches!(o, DrawOp::BeginClip { .. })));
+
+    // Saved and loaded intact; the runtime clips too.
+    assert_eq!(load_from_str(&save_to_string(&doc.project)).unwrap(), doc.project);
+    let pl = Player::new(&doc.project, 0);
+    let mut r = RecordingRenderer::default();
+    pl.render(&doc.project, RenderOptions::player(Matrix::IDENTITY), &mut r);
+    assert!(r.ops.iter().any(|o| matches!(o, DrawOp::BeginClip { .. })));
+}
+
+#[test]
+fn unmasking_releases_layers_and_rules_are_enforced() {
+    let (mut doc, mask, flowers) = masked_demo();
+    // A folder can't go into a mask.
+    let root = doc.project.root;
+    let folder = ops::add_layer(&mut doc, root, None, LayerKind::Folder).unwrap();
+    assert!(ops::move_layer(&mut doc, folder, Some(mask), 0).is_err());
+    // Back to a normal layer: the flowers come out, just below it.
+    ops::set_layer_props(&mut doc, mask, &LayerPatch { kind: Some(LayerKind::Normal), ..Default::default() }).unwrap();
+    let root = doc.project.symbol(doc.project.root).unwrap();
+    let pos = |id: LayerId| root.layers.iter().position(|l| l.id == id).unwrap();
+    assert_eq!(pos(flowers) + 1, pos(mask));
+    assert!(doc.project.layer(mask).unwrap().children.is_empty());
+    assert!(!ops_with(&doc.project, false).iter().any(|o| matches!(o, DrawOp::BeginClip { .. })));
+    // Undo puts the flowers back under the mask.
+    doc.undo().unwrap();
+    assert_eq!(doc.project.layer(mask).unwrap().children.len(), 1);
+    doc.project.validate().unwrap();
+    // A project (e.g. a hand-edited file) with a folder inside a mask is invalid.
+    let mut bad = doc.project.clone();
+    let id = LayerId(bad.alloc_id());
+    bad.layer_mut(mask).unwrap().children.push(Layer::new(id, "F", LayerKind::Folder));
+    assert!(bad.validate().is_err());
+}
+
+#[test]
+fn v6_files_load_as_v7() {
+    let mut v: Value = serde_json::from_str(&save_to_string(&demo_project())).unwrap();
+    v["schemaVersion"] = json!(6);
+    assert_eq!(load_from_str(&v.to_string()).unwrap(), demo_project());
 }

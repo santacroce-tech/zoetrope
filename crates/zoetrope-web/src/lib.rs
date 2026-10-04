@@ -84,6 +84,12 @@ impl zoetrope_core::render::Renderer for PreviewRenderer<'_> {
     fn end_group(&mut self) {
         self.0.end_group()
     }
+    fn begin_clip(&mut self, paths: &[(zoetrope_core::geom::Path, Matrix)]) {
+        self.0.begin_clip(paths)
+    }
+    fn end_clip(&mut self) {
+        self.0.end_clip()
+    }
     fn end_frame(&mut self) {
         self.0.end_frame()
     }
@@ -236,7 +242,7 @@ impl Engine {
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
-        let opts = RenderOptions { view, clip_to_stage: clip, show_guides, onion };
+        let opts = RenderOptions { view, clip_to_stage: clip, show_guides, onion, edit_masks: true };
         if self.levels.is_empty() {
             render_frame(&self.doc.project, frame, opts, &mut r);
         } else {
@@ -375,7 +381,7 @@ impl Engine {
         render_editing(
             p,
             &view,
-            RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None },
+            RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None, edit_masks: false },
             &mut r,
         );
     }
@@ -612,7 +618,11 @@ impl Engine {
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
-        pl.render(&self.doc.project, RenderOptions { view, clip_to_stage: clip, show_guides, onion: None }, &mut r);
+        pl.render(
+            &self.doc.project,
+            RenderOptions { view, clip_to_stage: clip, show_guides, onion: None, edit_masks: false },
+            &mut r,
+        );
     }
 
     /// Scripts due since the last call (empty when not playing):

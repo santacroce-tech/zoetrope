@@ -1,4 +1,4 @@
-# Project file format (`.zoe`) — schema version 6
+# Project file format (`.zoe`) — schema version 7
 
 UTF-8 JSON. Field names are camelCase. Unknown fields are ignored on read.
 Fields marked *optional* may be omitted and take the listed default; the
@@ -27,6 +27,8 @@ History:
   are optional fields, so `v4_to_v5` changes only the version.
 * **v6** (Phase 8). Adds the optional `publish` block (export settings);
   `v5_to_v6` changes only the version.
+* **v7** (mask layers). Adds the `"mask"` layer kind; `v6_to_v7` changes only
+  the version, so a v6 reader rejects files that may contain masks.
 
 ## Envelope
 
@@ -87,11 +89,11 @@ Layer lists (`Symbol.layers`, `Layer.children`) are **bottom-to-top**
 | Field | Type | Notes |
 |-------|------|-------|
 | `id`, `name` | | |
-| `kind` | `"normal"` \| `"guide"` \| `"folder"` | *optional*, default `normal`. Guide layers render in the editor only, never in the player/export. |
+| `kind` | `"normal"` \| `"guide"` \| `"folder"` \| `"mask"` | *optional*, default `normal`. Guide layers render in the editor only, never in the player/export. A mask layer's own shapes are not drawn: the union of their fills clips its `children` (fills and text glyphs count, a bitmap counts as its rectangle, strokes are ignored). In the editor an unlocked mask shows its shapes and doesn't clip, so they can be edited. |
 | `visible` | bool | *optional*, default `true`. For folders it cascades to children. |
 | `locked` | bool | *optional*, default `false`. Cascades. Locked content can't be selected or drawn into. |
-| `keyframes` | Keyframe[] | normal/guide layers only, at least one. See below. |
-| `children` | Layer[] | folders only. *Optional*, default `[]`. |
+| `keyframes` | Keyframe[] | normal/guide/mask layers, at least one. See below. |
+| `children` | Layer[] | folders and masks. *Optional*, default `[]`. A mask's children (the masked layers) draw below the mask and may only be `normal` or `guide` layers. |
 
 ### Keyframe & tween
 
@@ -335,7 +337,7 @@ An asset cannot be removed while a bitmap, text or keyframe sound uses it.
 ## Validation on load
 
 The root symbol exists; stage values are in range; ids are unique and
-`< nextId`; folders hold no elements and only folders hold child layers;
+`< nextId`; folders hold no elements; only folders and masks hold child layers, and a mask holds only normal and guide layers;
 element values are in range (opacity, tint amount, finite transforms,
 non-negative sizes and stroke widths, valid paints/dashes, non-empty finite
 paths, text sizes/spacing); every instance, bitmap, text-font and sound
@@ -352,7 +354,7 @@ pasted into the same project, another project, or another Zoetrope window
 (`zoetrope_core::clipboard`).
 
 ```json
-{ "format": "zoetrope-clipboard", "schemaVersion": 6,
+{ "format": "zoetrope-clipboard", "schemaVersion": 7,
   "elements": [ ... ], "symbols": [ ... ], "assets": [ ... ] }
 ```
 
