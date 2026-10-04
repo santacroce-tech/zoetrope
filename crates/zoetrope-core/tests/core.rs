@@ -2220,3 +2220,18 @@ fn v6_files_load_as_v7() {
     v["schemaVersion"] = json!(6);
     assert_eq!(load_from_str(&v.to_string()).unwrap(), demo_project());
 }
+
+#[test]
+fn script_names_list_instances_and_labels() {
+    let p = demo_project();
+    let (names, labels) = script::names_in(&p, p.root);
+    for n in ["bee1", "title", "playButton"] {
+        assert!(names.iter().any(|x| x == n), "{n} in {names:?}");
+    }
+    let mut sorted = names.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted, names);
+    assert!(labels.is_empty());
+    assert_eq!(script::names_in(&p, SymbolId(9999)), (vec![], vec![]));
+}

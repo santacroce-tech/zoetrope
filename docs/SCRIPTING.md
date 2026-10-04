@@ -12,6 +12,14 @@ the same runtime (`editor/src/runtime/`) on the same WASM core.
 | **Frame script** | a keyframe (Properties → frame → *Label & script*) | each time that timeline's playhead **enters** the keyframe's first frame | the timeline: `root`, or the movie clip |
 | **Symbol script** | a symbol (Library → `{ }`) | once for **every instance** when it appears on stage | the instance |
 
+The script editor (`ScriptEditor.tsx`, language support in `scriptlang.ts`)
+highlights JavaScript, completes the API, the timeline's instance names
+(`Engine.scriptNamesJson`), the script's own variables, frame labels inside
+`gotoAndPlay("…")`, stage event names and key names, and shows syntax errors
+as you type. Bracket mistakes are found by its tokenizer; everything else by
+compiling the script in QuickJS exactly as playback wraps it
+(`checkSyntax` in `runtime/scripting.ts`), without running it.
+
 The timeline marks keyframes that have a script with an **a**, and labelled
 keyframes with **⚑name**. Frame labels are names for `gotoAndPlay("name")`.
 

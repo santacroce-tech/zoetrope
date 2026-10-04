@@ -119,6 +119,7 @@ export function LibraryPanel({ engine, version, items, run, onEdit }: Props) {
             </p>
             <ScriptEditor
               value={engine.symbolScript(scripting.id) ?? ""}
+              names={JSON.parse(engine.scriptNamesJson(scripting.id))}
               onApply={(s) => run(() => engine.setSymbolScript(scripting.id, s.trim() ? s : undefined))}
               placeholder={"this.onEnterFrame = function () {\n  this.rotation += 2;\n};"}
               rows={20}
