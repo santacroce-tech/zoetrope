@@ -827,12 +827,13 @@ impl Engine {
 
     // ----- documents -----
 
-    /// `kind`: `"animation"` (default), `"game"` (the scripted demo) or
+    /// `kind`: `"animation"` (default), `"blank"`, `"game"` (the scripted demo) or
     /// `"stress"` (a heavy scene for performance checks).
     #[wasm_bindgen(js_name = newDemo)]
     pub fn new_demo(&mut self, kind: Option<String>) {
         self.replace_document(match kind.as_deref() {
             Some("game") => demo::game_project(),
+            Some("blank") => demo::blank_project(),
             // Profiling scene: 1000 nested, tweened flowers + clips + text.
             Some("stress") => demo::stress_project(1000),
             _ => demo::demo_project(),

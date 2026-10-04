@@ -1,0 +1,38 @@
+<!-- title: Symbols
+     description: Graphics, movie clips and buttons; the library; editing symbols in place; instance properties. -->
+<h1>Symbols</h1>
+<p class="lede">A symbol is a reusable object with its own timeline. Place it as many times as you like; edit it once and every instance updates.</p>
+
+<h2>Creating symbols</h2>
+<ul>
+  <li>Select objects and press <kbd>F8</kbd>, or right away draw inside a symbol you're editing.</li>
+  <li>Pick the type: <b>Graphic</b>, <b>Movie clip</b> or <b>Button</b>. You can change it later in the Library.</li>
+  <li>Drag a symbol from the <b>Library</b> onto the stage to place another instance.</li>
+</ul>
+
+<h2>The three types</h2>
+<table>
+  <tr><th>Type</th><th>Its timeline…</th><th>Use it for</th></tr>
+  <tr><td>◇ Graphic</td><td>…follows the parent's frames. Choose <b>Loop</b>, <b>Play once</b> or <b>Single frame</b>, and the <b>First</b> frame, per instance.</td><td>Lip-sync, walk cycles you scrub with the main timeline, reusable art.</td></tr>
+  <tr><td>🎞 Movie clip</td><td>…runs on its own clock from the moment the instance appears, looping. Scripts can <code>stop()</code>, <code>play()</code> and <code>gotoAndPlay()</code> it.</td><td>Ambient loops (a bee's wings), anything scripted, characters.</td></tr>
+  <tr><td>⏺ Button</td><td>…has four frames: <b>Up</b>, <b>Over</b> (pointer over it), <b>Down</b> (pressed) and <b>Hit</b> (the clickable area, never shown).</td><td>Clickable controls; wire them up with <code>onClick</code>.</td></tr>
+</table>
+<div class="note">In the editor, movie clips show where they'd be if everything played straight through. Press ▶ to see them on their real clocks, with buttons responding and scripts running.</div>
+
+<h2>Editing in place</h2>
+<figure><img src="{{root}}assets/img/symbol.webp" alt="Editing the Flower symbol in place; the rest of the scene is dimmed and the breadcrumb shows Scene 1 › flower B (Flower)" loading="lazy"></figure>
+<ul>
+  <li>Double-click an instance (or <kbd>⌘E</kbd>) to edit its symbol in place. The rest of the scene dims, and the breadcrumb above the stage shows where you are.</li>
+  <li>Double-click a symbol in the Library (or ✎) to edit it on its own.</li>
+  <li><kbd>Esc</kbd>, or a click on the breadcrumb, goes back up.</li>
+</ul>
+
+<h2>Instance properties</h2>
+<ul>
+  <li><b>Name</b>: the instance name scripts use (<code>bee.x = 10</code>). Names must be unique on a timeline to be useful.</li>
+  <li><b>Symbol</b>: swap the instance to another symbol while keeping its position and transform.</li>
+  <li>Transform, opacity, blend and tint apply to the whole instance, including everything nested inside.</li>
+</ul>
+
+<h2>The Library</h2>
+<p>Each entry shows a thumbnail, the type, its length in frames and how many times it's used. The buttons edit (✎), add a symbol script (<b>{ }</b>), duplicate (⧉) and delete (🗑; only when unused). Double-click a name to rename it.</p>

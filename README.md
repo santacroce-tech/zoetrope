@@ -3,6 +3,11 @@
 A Flash-like animation IDE (native desktop via Tauri) and web runtime, built on
 one Rust/WASM core shared by the editor preview and the exported player.
 
+**[Website](https://santacroce-tech.github.io/zoetrope/)** ·
+**[Download](https://santacroce-tech.github.io/zoetrope/#download)** (macOS, Windows, Linux) ·
+**[Web editor](https://santacroce-tech.github.io/zoetrope/app/)** ·
+**[Manual and tutorials](https://santacroce-tech.github.io/zoetrope/manual/)**
+
 - **Draw and animate:**
   - Vector shapes, a pen and pencil, gradients, and bitmaps.
   - Layers and folders.
@@ -22,6 +27,7 @@ one Rust/WASM core shared by the editor preview and the exported player.
 | [docs/SCRIPTING.md](docs/SCRIPTING.md) | Scripting API reference, event order, sandbox and limits |
 | [docs/EXPORT.md](docs/EXPORT.md) | Export formats, the player, and how preview/export parity is verified |
 | [docs/TESTING.md](docs/TESTING.md) | The test suites and `scripts/check.sh` |
+| [docs/WEBSITE.md](docs/WEBSITE.md) | The website (GitHub Pages) and how releases are built and published |
 
 In the app, press **?** for every keyboard shortcut and **⚙** for preferences.
 
@@ -29,7 +35,7 @@ In the app, press **?** for every keyboard shortcut and **⚙** for preferences.
 
 * Rust (stable) with `rustup target add wasm32-unknown-unknown`
 * `wasm-bindgen` CLI **0.2.126** (`cargo install wasm-bindgen-cli --version 0.2.126`)
-* Node 20+ and the Tauri CLI (`cargo install tauri-cli --version "^2"`)
+* Node 20+ (the Tauri CLI comes with `npm install`: `npm run tauri dev`; `cargo tauri` also works)
 
 ## Commands
 
@@ -53,8 +59,11 @@ cargo test --workspace                       # core: model, undo, timeline, runt
 cd editor && npm test                        # scripting runtime under Node (real WASM + QuickJS)
 cargo run -p zoetrope-core --release --example profile   # traversal profile
 
-# Release bundle
-cd editor && cargo tauri build
+# Release bundle for this machine (CI builds all platforms on a version tag; see docs/WEBSITE.md)
+cd editor && npm run tauri build
+
+# Website (landing page, manual, live demos, web editor) into site/dist
+scripts/build-site.sh
 ```
 
 ## Layout
@@ -69,4 +78,7 @@ editor/src/player      the exported player (bundled by `npm run player`)
 editor/tests           runtime tests (Node + real WASM + QuickJS)
 scripts/build-wasm.sh  cargo → wasm32 → wasm-bindgen (optional wasm-opt)
 scripts/check.sh       all automated checks
+scripts/build-site.sh  the website
+site/                  website sources (landing page, manual)
+.github/workflows      CI, releases (all platforms), Pages
 ```

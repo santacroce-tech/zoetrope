@@ -1,0 +1,43 @@
+<!-- title: Troubleshooting
+     description: Install warnings, sound, exports from file://, recovering unsaved work, where files are kept, and reporting problems. -->
+<h1>Troubleshooting</h1>
+
+<h2>Installing and launching</h2>
+<h3>macOS says the app can't be opened or "is damaged"</h3>
+<p>The app isn't notarized by Apple yet. Right-click it in Applications and choose <b>Open</b>. If it says "damaged", run <code>xattr -dr com.apple.quarantine /Applications/Zoetrope.app</code> in Terminal and try again.</p>
+<h3>Windows SmartScreen blocks the installer</h3>
+<p>Click <b>More info</b> → <b>Run anyway</b>. The installer isn't code-signed yet.</p>
+<h3>The Linux AppImage doesn't start</h3>
+<p>Make it executable (<code>chmod +x</code>) and install FUSE 2 (<code>sudo apt install libfuse2</code> on Ubuntu). If you see WebKit errors, your distribution may be older than WebKitGTK 4.1 needs. Use the <code>.deb</code>/<code>.rpm</code> on a supported release, or the <a href="{{root}}app/">web editor</a>.</p>
+
+<h2>Working</h2>
+<h3>I lost unsaved work</h3>
+<p>Zoetrope autosaves unsaved changes every 30 seconds (adjustable in <b>⚙ Preferences</b>). After a crash or quit without saving, the next launch asks <b>Recover unsaved work?</b>. Choose <b>Recover</b>, then save. Autosaves are kept here:</p>
+<table>
+  <tr><td>macOS</td><td><code>~/Library/Application Support/app.zoetrope.editor/</code></td></tr>
+  <tr><td>Windows</td><td><code>%APPDATA%\app.zoetrope.editor\</code></td></tr>
+  <tr><td>Linux</td><td><code>~/.local/share/app.zoetrope.editor/</code></td></tr>
+  <tr><td>Web editor</td><td>The browser's storage for this site; clearing site data removes it.</td></tr>
+</table>
+<h3>The editor shows "Zoetrope hit an unexpected error"</h3>
+<p>Click <b>Restart editor</b>; your work up to the last autosave is offered back. Please <a href="{{repo}}/issues/new">report the problem</a> with the details from the developer console, if you can.</p>
+<h3>Arrow keys don't move my objects while previewing</h3>
+<p>That's on purpose: during ▶ preview the keyboard belongs to your movie, so games can use it. Press <kbd>Esc</kbd> to stop the preview.</p>
+<h3>My script doesn't do anything</h3>
+<ul>
+  <li>Open <b>Output</b> in the status bar: errors show their location and line number.</li>
+  <li>Check the <b>instance names</b> in Properties; scripts use those, not symbol names.</li>
+  <li>Did you <b>Apply</b> the script (<kbd>⌘↵</kbd>)? The timeline shows an <b>a</b> on keyframes with a script.</li>
+  <li>Scripts run only in ▶ preview and in exports, not while you edit.</li>
+</ul>
+
+<h2>Exports</h2>
+<h3>My exported page has no sound</h3>
+<p>Browsers block audio until the viewer interacts with the page. Sound starts at the first click or key press, or export with <b>Start on click</b>.</p>
+<h3>The folder export shows "loads its assets from a separate file"</h3>
+<p>Folder exports must be served over http(s). Upload the folder to a web host, or test locally with <code>python3 -m http.server</code> in that folder. For a file that works from disk, export as a <b>Single HTML file</b>.</p>
+<h3>Keyboard doesn't work in an embedded movie</h3>
+<p>Click the movie first so it has keyboard focus.</p>
+
+<h2>Still stuck?</h2>
+<p>Search or open an issue on <a href="{{repo}}/issues">GitHub</a>. Include your OS and Zoetrope version and, if possible, a small <code>.zoe</code> file that shows the problem.</p>

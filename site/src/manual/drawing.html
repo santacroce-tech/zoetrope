@@ -1,0 +1,57 @@
+<!-- title: Drawing
+     description: Shapes, the pen and pencil, editing anchors, fills, strokes and gradients, bitmaps, arranging and aligning. -->
+<h1>Drawing</h1>
+<p class="lede">Everything you draw in Zoetrope is vector art: crisp at any size, light in exported files, and animatable.</p>
+
+<h2>Shape tools</h2>
+<table>
+  <tr><th>Tool</th><th>Key</th><th>How to use it</th></tr>
+  <tr><td>Rectangle</td><td><kbd>R</kbd></td><td>Drag. <kbd>Shift</kbd>: square. <kbd>Alt</kbd>: from the center.</td></tr>
+  <tr><td>Ellipse</td><td><kbd>O</kbd></td><td>Drag. <kbd>Shift</kbd>: circle. <kbd>Alt</kbd>: from the center.</td></tr>
+  <tr><td>Polygon / star</td><td><kbd>U</kbd></td><td>Drag from the center outward; the drag direction sets the rotation. Set <b>Sides</b>, tick <b>Star</b>, and set the <b>Inner</b> radius % in the toolbar.</td></tr>
+  <tr><td>Line</td><td><kbd>N</kbd></td><td>Drag. <kbd>Shift</kbd>: snap to 45°.</td></tr>
+  <tr><td>Pen</td><td><kbd>P</kbd></td><td>Click to place corner points, drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd>, <kbd>Esc</kbd> or a double-click finishes an open path.</td></tr>
+  <tr><td>Pencil</td><td><kbd>Y</kbd></td><td>Draw freehand. In the toolbar, <b>Smooth</b> fits curves through your stroke; <b>Ink</b> keeps straight segments.</td></tr>
+</table>
+<p>New shapes use the <b>Fill</b> and <b>Stroke</b> under the tools. Click the color to change it, <b>■/▤/◎</b> to cycle solid, linear and radial fills, <b>⌀</b> for none, and set the stroke width in the number box.</p>
+<div class="tip">With <b>Snap objects</b> on (toolbar), shapes and drags snap to other objects' edges and centers and to the stage, with pink guide lines. <b>Snap grid</b> snaps to the grid; set its size next to <b>Grid</b>.</div>
+
+<h2>Selecting and transforming</h2>
+<p>The <b>Selection</b> tool (<kbd>V</kbd>) selects objects. Click one, <kbd>Shift</kbd>-click to add more, or drag a marquee on empty stage. Then:</p>
+<ul>
+  <li><b>Move</b>: drag, or nudge with the arrow keys (<kbd>Shift</kbd> = 10 px).</li>
+  <li><b>Scale</b>: drag a square handle. <kbd>Shift</kbd> keeps proportions, <kbd>Alt</kbd> scales around the center.</li>
+  <li><b>Rotate</b>: drag just outside a corner. <kbd>Shift</kbd> steps by 15°.</li>
+  <li><b>Skew</b>: drag just outside an edge's middle.</li>
+  <li><b>Pivot</b>: drag the white dot. Rotation and scaling happen around it.</li>
+</ul>
+<p>The <b>Properties</b> panel has exact values for position, size, scale, rotation, skew and pivot, plus <b>Appearance</b>: opacity, blend mode (Multiply, Screen, Overlay, Darken, Lighten, Hard light, Difference, Add, and Layer), and a <b>Tint</b> color with an amount.</p>
+
+<h2>Editing points</h2>
+<p>The <b>Subselection</b> tool (<kbd>A</kbd>) edits a shape's anchors and curve handles:</p>
+<ul>
+  <li>Click a shape to see its anchors; click or <kbd>Shift</kbd>-click anchors to select them, then drag.</li>
+  <li>Drag a handle to reshape a curve.</li>
+  <li><kbd>Alt</kbd>-click a segment to add an anchor there; <kbd>Delete</kbd> removes the selected anchors.</li>
+  <li>Double-click an anchor to switch it between corner and smooth.</li>
+</ul>
+<p>Rectangles, ellipses, polygons and lines stay editable as primitives until you need more. <b>Convert to path</b> (<kbd>⌘B</kbd> / <kbd>Ctrl+B</kbd>, or <b>to path</b> in Properties) turns them into free-form paths.</p>
+
+<h2>Fill, stroke and gradients</h2>
+<ul>
+  <li>In <b>Properties → Fill &amp; stroke</b>, choose None, Solid, Linear or Radial for each. Under the gradient preview, each stop has a color and a position (%); <b>✕</b> removes a stop and <b>＋ stop</b> adds one in the widest gap.</li>
+  <li>Strokes have width, caps (butt, round, square), joins (miter, round, bevel), miter limit and dash patterns.</li>
+  <li><b>Fill rule</b> (Non-zero or Even-odd) decides whether overlapping parts of a path become holes.</li>
+  <li>The <b>Gradient transform</b> tool (<kbd>F</kbd>) shows on-canvas handles: start and end for linear gradients; center, radius and focal point for radial ones.</li>
+  <li>The <b>Eyedropper</b> (<kbd>I</kbd>) picks up a shape's fill or stroke into the tool style. The <b>Paint bucket</b> (<kbd>K</kbd>) applies the current fill; <kbd>Shift</kbd>-click applies the stroke color.</li>
+</ul>
+
+<h2>Images</h2>
+<p><b>Import…</b> (<kbd>⌘I</kbd>) or drag PNG, JPEG and GIF files onto the stage. Images are embedded in the project, so there are no broken links. They scale, rotate, fade and tint like any other object.</p>
+
+<h2>Arranging and aligning</h2>
+<ul>
+  <li><b>Order</b> within a layer: <kbd>⌘]</kbd> / <kbd>⌘[</kbd> bring forward / send backward. Add <kbd>Shift</kbd> to bring to front or send to back. The buttons are in Properties.</li>
+  <li><b>Align and distribute</b> in Properties: left, centers, right, top, middle, bottom, and even spacing. Tick <b>to stage</b> to align to the stage instead of the selection.</li>
+  <li><b>Duplicate</b>: <kbd>⌘D</kbd>. <b>Move to another layer</b>: the <b>Layer</b> menu in Properties.</li>
+</ul>

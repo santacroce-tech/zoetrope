@@ -81,24 +81,28 @@ ${o.body}
 `;
 }
 
-/** The files to write for the current project and its publish settings. */
-export async function buildExport(engine: Engine, settings: PublishSettings, fallbackTitle: string): Promise<ExportFile[]> {
+/**
+ * The files to write for the current project and its publish settings.
+ * `player` is the player bundle's source; by default it's loaded from the
+ * build (scripts outside the browser pass it in).
+ */
+export async function buildExport(engine: Engine, settings: PublishSettings, fallbackTitle: string, player?: string): Promise<ExportFile[]> {
   const title = settings.title.trim() || fallbackTitle;
   const base = baseName(title);
   const stage = JSON.parse(engine.stageJson());
-  const [player, pack] = await Promise.all([playerScript(), gzip(engine.savePack())]);
+  const [playerJs, pack] = await Promise.all([player ?? playerScript(), gzip(engine.savePack())]);
   const common = { title, settings, width: stage.width, height: stage.height };
   const config = { scale: settings.scale, startOnClick: settings.startOnClick };
   if (settings.mode === "singleFile") {
     const body = `<script type="application/octet-stream" id="zoetrope-pack">${toBase64(pack)}</script>
-<script>${scriptSafe(player)}</script>`;
+<script>${scriptSafe(playerJs)}</script>`;
     return [{ name: `${base}.html`, data: page({ ...common, config, body }) }];
   }
   const packName = `${base}.zoepack`;
   const body = `<script src="${PLAYER_FILE}"></script>`;
   return [
     { name: `${base}.html`, data: page({ ...common, config: { ...config, pack: packName }, body }) },
-    { name: PLAYER_FILE, data: player },
+    { name: PLAYER_FILE, data: playerJs },
     { name: packName, data: pack },
   ];
 }

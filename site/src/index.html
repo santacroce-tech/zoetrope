@@ -1,0 +1,104 @@
+<!-- title: Zoetrope
+     description: A Flash-style animation studio for the modern web. Draw, animate, script and export to a single HTML file that plays anywhere, offline. Free and open source for macOS, Windows and Linux. -->
+<section class="hero">
+  <div class="hero-text">
+    <h1>Animate, script and publish to the web.</h1>
+    <p class="lede">Zoetrope is a free, open-source animation studio in the spirit of Flash. Draw vector art, animate it on a timeline, make it interactive with JavaScript, and export one HTML file that plays anywhere, even offline.</p>
+    <div class="cta">
+      <a class="button primary" id="hero-download" href="#download">Download</a>
+      <a class="button" href="{{root}}app/">Try it in your browser</a>
+      <a class="button ghost" href="{{root}}manual/">Read the manual</a>
+    </div>
+    <p class="small muted" id="hero-platforms">For macOS, Windows and Linux.</p>
+  </div>
+  <figure class="hero-shot">
+    <img src="{{root}}assets/img/editor.webp" alt="The Zoetrope editor: tools on the left, the stage in the middle, properties and the library on the right, and the timeline below." width="1440" height="900">
+  </figure>
+</section>
+
+<section id="demos" class="band">
+  <h2>Made with Zoetrope, playing right here</h2>
+  <p class="section-lede">These are real exports, the same single HTML files the app produces, embedded in this page. Click to start.</p>
+  <div class="demos">
+    <figure>
+      <iframe src="{{root}}demos/spring.html" title="Spring in Zoetrope: animation demo" loading="lazy" allow="autoplay"></iframe>
+      <figcaption><b>Spring in Zoetrope.</b> Nested symbols, eased tweens, movie clips on their own clocks, text in an embedded font and a streamed soundtrack. The ▶ button pauses and resumes it with a three-line script.</figcaption>
+    </figure>
+    <figure>
+      <iframe src="{{root}}demos/bee-catcher.html" title="Bee Catcher: a small game" loading="lazy" allow="autoplay"></iframe>
+      <figcaption><b>Bee Catcher.</b> A complete game in one frame script: arrow keys, collisions, a score, a timer and a restart button. Click inside, then use the arrow keys. <a href="{{root}}manual/first-game.html">Build one yourself</a>.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="features">
+  <h2>Everything you need for 2D animation</h2>
+  <div class="features">
+    <article>
+      <img src="{{root}}assets/img/tut2-stage.webp" alt="Shapes drawn with the ellipse, polygon and text tools" loading="lazy">
+      <h3>Vector drawing</h3>
+      <p>Rectangles, ellipses, stars, lines, a Bézier pen and a smoothing pencil. Gradients, strokes and dashes, bitmaps, and precise anchor editing, with snapping, rulers and guides.</p>
+    </article>
+    <article>
+      <img src="{{root}}assets/img/timeline.webp" alt="The timeline with onion skinning showing earlier and later frames" loading="lazy">
+      <h3>Timeline and tweens</h3>
+      <p>Layers and folders, keyframes, motion and shape tweens with eased or custom Bézier timing, and onion skinning. Frame labels let scripts jump around.</p>
+    </article>
+    <article>
+      <img src="{{root}}assets/img/symbol.webp" alt="Editing a symbol in place, with the rest of the scene dimmed" loading="lazy">
+      <h3>Symbols that nest</h3>
+      <p>Graphics follow their parent's timeline; movie clips run on their own clocks; buttons have Up, Over, Down and Hit states. Edit any of them in place.</p>
+    </article>
+    <article>
+      <img src="{{root}}assets/img/text.webp" alt="Typing text on the stage with the text tool" loading="lazy">
+      <h3>Text and sound</h3>
+      <p>Real typography (kerning, ligatures, wrapping) from fonts embedded in the project, so text looks the same everywhere. Event and stream sounds stay in sync with the timeline.</p>
+    </article>
+    <article>
+      <img src="{{root}}assets/img/script.webp" alt="A frame script in the script editor" loading="lazy">
+      <h3>Scripting</h3>
+      <p>Modern JavaScript with a familiar API: <code>stop()</code>, <code>gotoAndPlay("label")</code>, <code>bee.x += 5</code>, <code>onEnterFrame</code>, <code>hitTestObject</code>, <code>Key.isDown</code>. Scripts run sandboxed, so a bug can't hang the app.</p>
+    </article>
+    <article>
+      <img src="{{root}}assets/img/export.webp" alt="The export dialog" loading="lazy">
+      <h3>Export anywhere</h3>
+      <p>One self-contained HTML file that works offline, or a page plus an asset pack for big projects. Letterbox, fill or fixed scaling, and an embed snippet. It plays exactly like the preview, frame for frame.</p>
+    </article>
+  </div>
+</section>
+
+<section class="band why">
+  <h2>Why it plays the same everywhere</h2>
+  <div class="columns">
+    <p>Everything that decides what a frame looks like (the scene graph, tweens, text layout, the runtime, script semantics) lives in one Rust core compiled to WebAssembly. The editor's preview and every exported page run that same core, and every release checks frame-by-frame fingerprints between them.</p>
+    <p>Projects are plain, versioned JSON with your images, fonts and sounds embedded, so a file opens the same way years from now. Unsaved work is autosaved and offered back after a crash. Undo covers every operation.</p>
+  </div>
+</section>
+
+<section id="download">
+  <h2>Download</h2>
+  <p class="section-lede" id="release-line">Free, open source, no account needed.</p>
+  <div class="downloads">
+    <article class="platform" data-os="mac">
+      <h3>macOS</h3>
+      <p class="muted">One universal app for Apple Silicon and Intel Macs.</p>
+      <div class="assets" data-assets="mac"><a class="button" href="{{repo}}/releases/latest">Disk image (.dmg)</a></div>
+    </article>
+    <article class="platform" data-os="windows">
+      <h3>Windows</h3>
+      <p class="muted">Windows 10 and 11, 64-bit.</p>
+      <div class="assets" data-assets="windows"><a class="button" href="{{repo}}/releases/latest">Installer (.exe)</a></div>
+    </article>
+    <article class="platform" data-os="linux">
+      <h3>Linux</h3>
+      <p class="muted">64-bit, WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 37+): AppImage, .deb or .rpm.</p>
+      <div class="assets" data-assets="linux"><a class="button" href="{{repo}}/releases/latest">AppImage</a></div>
+    </article>
+    <article class="platform" data-os="web">
+      <h3>Web</h3>
+      <p class="muted">No install: the full editor in Chrome, Edge, Firefox or Safari 16.4+. Projects save as downloads.</p>
+      <div class="assets"><a class="button" href="{{root}}app/">Open the web editor</a></div>
+    </article>
+  </div>
+  <p class="small muted">The installers aren't code-signed yet, so the first launch shows a warning: on macOS, right-click the app and choose <b>Open</b>; on Windows, choose <b>More info → Run anyway</b>. <a href="{{root}}manual/getting-started.html#install">Install guide</a> · <a href="{{repo}}/releases">All releases and checksums</a></p>
+</section>

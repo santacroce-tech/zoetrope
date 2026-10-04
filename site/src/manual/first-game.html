@@ -1,0 +1,68 @@
+<!-- title: Tutorial: a small game
+     description: Use instance names and a frame script to build a "catch the star" game with keyboard controls, collisions and a score. -->
+<h1>Tutorial: a small game</h1>
+<p class="lede">Build "catch the star": move a ball with the arrow keys, touch the star to score, and watch the star jump somewhere else. You'll learn instance names, frame scripts, <code>onEnterFrame</code>, the keyboard and collisions.</p>
+
+<h2>1. Make the pieces</h2>
+<ol class="steps">
+  <li><b>New… → Blank project.</b></li>
+  <li><b>The player.</b> Draw a circle with the <b>Ellipse</b> tool (<kbd>O</kbd>, hold <kbd>Shift</kbd>). Select it (<kbd>V</kbd>), press <kbd>F8</kbd>, name it <b>Player</b>, choose <b>Movie clip</b> and convert.</li>
+  <li><b>Name the instance.</b> With the instance selected, type <b>player</b> in the <b>Name</b> field at the top of Properties and press <kbd>Enter</kbd>. Scripts find objects by this <i>instance name</i>, not by the symbol name.</li>
+  <li><b>The star.</b> Pick the <b>Polygon</b> tool (<kbd>U</kbd>), tick <b>Star</b> in the toolbar options, and drag out a star from its center. Convert it with <kbd>F8</kbd> to a movie clip named <b>Star</b>, and give the instance the name <b>star</b>.</li>
+  <li><b>The score.</b> Pick the <b>Text</b> tool (<kbd>T</kbd>), click near the top-left corner, type <code>Score: 0</code> and press <kbd>Esc</kbd>. Name the text <b>scoreText</b>.</li>
+</ol>
+<figure><img src="{{root}}assets/img/tut2-stage.webp" alt="The stage with a circle, a star and the text Score: 0; the text's properties show the name scoreText" loading="lazy"></figure>
+
+<h2>2. Add an Actions layer</h2>
+<p>Keeping scripts on their own layer makes them easy to find.</p>
+<ol class="steps">
+  <li>Click <b>＋ Layer</b> in the timeline bar, double-click the new layer's name and call it <b>Actions</b>.</li>
+  <li>Click <b>frame 1</b> of the Actions layer. The Properties panel shows <b>Label &amp; script</b> with a code editor.</li>
+</ol>
+
+<h2>3. Write the script</h2>
+<p>Type (or paste) this into the script editor, then press <kbd>⌘↵</kbd> / <kbd>Ctrl+Enter</kbd> or click <b>Apply</b>. Applying is one undoable step. The keyframe gets a small <b>a</b> marker in the timeline.</p>
+<pre><code>stop();
+var score = 0;
+const speed = 6;
+
+function moveStar() {
+  star.x = 50 + Math.random() * (stage.width - 100);
+  star.y = 50 + Math.random() * (stage.height - 100);
+}
+moveStar();
+
+this.onEnterFrame = function () {
+  if (Key.isDown("ArrowLeft")) player.x -= speed;
+  if (Key.isDown("ArrowRight")) player.x += speed;
+  if (Key.isDown("ArrowUp")) player.y -= speed;
+  if (Key.isDown("ArrowDown")) player.y += speed;
+
+  if (player.hitTestObject(star)) {
+    score += 1;
+    scoreText.text = "Score: " + score;
+    moveStar();
+  }
+};</code></pre>
+<figure><img src="{{root}}assets/img/tut2-script.webp" alt="The frame script in the Properties panel, with the Actions layer selected in the timeline" loading="lazy"></figure>
+
+<h3>What it does</h3>
+<ul>
+  <li><b>The script runs when the playhead enters frame 1.</b> <code>stop()</code> keeps the main timeline there. Here it has only one frame anyway, but it's a good habit.</li>
+  <li><b><code>player</code>, <code>star</code> and <code>scoreText</code></b> are the instance names you set. Assigning <code>star.x</code> moves the star. From then on, the script, not the timeline, controls that property.</li>
+  <li><b><code>var score</code></b> becomes a property of the main timeline, so the function and the handler share it. <code>const</code> and <code>let</code> stay local to the script.</li>
+  <li><b><code>this.onEnterFrame</code></b> runs once per frame (24 times a second here). <code>Key.isDown</code> reads the keyboard, and <code>hitTestObject</code> checks whether the two objects' bounds overlap.</li>
+</ul>
+
+<h2>4. Play</h2>
+<p>Press <kbd>Enter</kbd>. While the preview runs, the keyboard belongs to your movie: use the arrow keys to chase the star, and press <kbd>Esc</kbd> to stop. If something goes wrong, the <b>Output</b> panel opens with the error and its line number, and <code>trace("…")</code> prints there too.</p>
+<figure><img src="{{root}}assets/img/tut2-play.webp" alt="The game running in the preview: the ball has moved and the star jumped to a new position" loading="lazy"></figure>
+
+<h2>5. Ideas to try</h2>
+<ul>
+  <li><b>Spin the star.</b> Select the Star symbol in the Library, click <b>{ }</b> and add a symbol script, which runs for every star instance:
+    <pre><code>this.onEnterFrame = function () { this.rotation += 4; };</code></pre></li>
+  <li><b>A timer.</b> Count frames in <code>onEnterFrame</code>, and when time runs out, <code>gotoAndStop("over")</code> to a second keyframe labelled <code>over</code> that shows the final score. The built-in <b>Game demo</b> does exactly this: open it with <b>New… → Game demo</b> and read its scripts.</li>
+  <li><b>A restart button.</b> Make a <b>Button</b> symbol, name the instance, and set <code>restartButton.onClick = function () { … };</code>.</li>
+</ul>
+<p>When you're happy, <a href="exporting.html">export it</a>. The exported page runs the same scripts with the same results. All the scripting details are in <a href="scripting.html">Scripting</a>.</p>

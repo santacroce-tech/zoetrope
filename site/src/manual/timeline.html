@@ -1,0 +1,42 @@
+<!-- title: Timeline and tweens
+     description: Layers and folders, frames and keyframes, motion and shape tweens, easing, onion skinning and frame labels. -->
+<h1>Timeline and tweens</h1>
+<p class="lede">The timeline is where things change over time. Each row is a layer; each cell is a frame; a filled dot is a keyframe.</p>
+<figure><img src="{{root}}assets/img/timeline.webp" alt="The timeline with several layers, a tween span on the Sky layer and onion skinning on" loading="lazy"></figure>
+
+<h2>Layers</h2>
+<ul>
+  <li><b>＋ Layer</b> adds a layer above the active one; <b>＋ Folder</b> groups layers; 🗑 deletes the active layer.</li>
+  <li>Double-click a name to rename it. Drag rows to reorder them or drop them into folders. Higher rows draw on top.</li>
+  <li>The eye hides a layer; the dot locks it so you can't select its objects by accident.</li>
+  <li><b>Guide</b> turns a layer into a guide layer. It's visible while editing, for sketches and layout lines, but is never exported.</li>
+</ul>
+
+<h2>Frames and keyframes</h2>
+<p>A <b>keyframe</b> is where a layer's content changes. Between keyframes, the layer holds or tweens its content. Click a cell to select that frame, then:</p>
+<table>
+  <tr><th>Command</th><th>Key</th><th>Effect</th></tr>
+  <tr><td>Insert frame</td><td><kbd>F5</kbd></td><td>Lengthens the span (or extends the layer to this frame).</td></tr>
+  <tr><td>Remove frame</td><td><kbd>Shift F5</kbd></td><td>Shortens the span.</td></tr>
+  <tr><td>Keyframe</td><td><kbd>F6</kbd></td><td>New keyframe here with a copy of the current content, ready to pose.</td></tr>
+  <tr><td>Blank keyframe</td><td><kbd>F7</kbd></td><td>New empty keyframe.</td></tr>
+  <tr><td>Clear keyframe</td><td><kbd>Shift F6</kbd></td><td>Merges the keyframe into the previous span.</td></tr>
+</table>
+<p>Play with <kbd>Enter</kbd>, step with <kbd>,</kbd> and <kbd>.</kbd>, jump with <kbd>Home</kbd> and <kbd>End</kbd>. The frame rate is set in the stage properties.</p>
+
+<h2>Tweens</h2>
+<p>Select a frame inside a span that is followed by another keyframe, then click <b>Motion tween</b> or <b>Shape tween</b> (or choose one under <b>Tween</b> in Properties).</p>
+<ul>
+  <li><b>Motion tweens</b> interpolate position, scale, rotation, skew, pivot, opacity and tint. They work on anything, and are the usual choice for symbols. <b>Spins</b> adds full turns.</li>
+  <li><b>Shape tweens</b> also morph shape geometry, fills and strokes. Rectangles tween to rectangles parametrically; different shapes are converted to paths and morphed point by point.</li>
+  <li>Objects are paired across the two keyframes by identity: a keyframe made with <kbd>F6</kbd> copies its objects, so they pair up automatically.</li>
+</ul>
+
+<h3>Easing</h3>
+<p>Under <b>Easing</b> choose Linear, a preset (In, Out and In Out variants of Quad, Cubic, Sine, Back, Bounce and Elastic), or <b>Custom (bezier)</b> and drag the two handles. The curve plots progress over the span.</p>
+
+<h2>Onion skin</h2>
+<p><b>Onion</b> shows faded neighbouring frames: earlier in blue, later in green. The two numbers set how many on each side. Locked layers aren't onion-skinned, which is handy for backgrounds.</p>
+
+<h2>Frame labels and scripts</h2>
+<p>In the frame's <b>Label &amp; script</b> section you can name a keyframe (shown as <b>⚑name</b> in the timeline) and attach a script (shown as <b>a</b>). Scripts jump to labels with <code>gotoAndPlay("name")</code>. See <a href="scripting.html">Scripting</a>.</p>

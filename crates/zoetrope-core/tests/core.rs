@@ -1976,3 +1976,25 @@ fn random_edit_sequences_undo_and_redo_exactly() {
         assert!(!doc.redo().unwrap());
     }
 }
+
+#[test]
+fn blank_project_is_valid_and_editable() {
+    let mut doc = Document::new(zoetrope_core::demo::blank_project());
+    doc.project.validate().unwrap();
+    let layer = root_layers(&doc.project)[0];
+    let s = style(Some(Color::rgb(200, 50, 50)), None);
+    let id = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Ellipse,
+        Point::new(10.0, 10.0),
+        Point::new(60.0, 60.0),
+        Modifiers::default(),
+        &ShapeOptions::default(),
+        &s,
+        0,
+    )
+    .unwrap();
+    assert!(id.is_some());
+    assert_eq!(load_from_str(&save_to_string(&doc.project)).unwrap(), doc.project);
+}

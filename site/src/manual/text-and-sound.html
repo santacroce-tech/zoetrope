@@ -1,0 +1,30 @@
+<!-- title: Text and sound
+     description: Typing on the stage, fonts embedded in the project, wrapping and alignment; event and stream sounds. -->
+<h1>Text and sound</h1>
+
+<h2>Text</h2>
+<figure><img src="{{root}}assets/img/text.webp" alt="Typing Hello, Zoetrope! on the stage with the text tool" loading="lazy"></figure>
+<ul>
+  <li>Pick the <b>Text</b> tool (<kbd>T</kbd>). <b>Click</b> for text that grows as you type, or <b>drag</b> a box for text that wraps at its width.</li>
+  <li>Type into the field under the box; the stage shows the real result as you type. <kbd>Esc</kbd>, <kbd>⌘↵</kbd> or clicking elsewhere finishes. An empty new text is discarded.</li>
+  <li>Click an existing text with the text tool, or double-click it with the selection tool, to edit it.</li>
+  <li>The toolbar sets the style for new text: font, size, color and alignment. A selected text shows all its settings in Properties: content, font, size, letter spacing, line height, box width (0 = automatic), alignment, and a solid or gradient fill.</li>
+</ul>
+<h3>Fonts</h3>
+<p>Text is laid out by Zoetrope itself, with kerning, ligatures and proper shaping, from fonts <b>embedded in the project</b>. Your animation looks identical on every computer and in every exported page, whether or not the font is installed there.</p>
+<ul>
+  <li>The built-in font is <b>Zoetrope Sans</b> (based on Lato).</li>
+  <li>Choose <b>Import font…</b> in any font menu to add a <code>.ttf</code> or <code>.otf</code> file. Check that the font's license allows embedding before you publish.</li>
+</ul>
+<div class="tip">Scripts can change a text's content: name it (e.g. <code>scoreText</code>) and set <code>scoreText.text = "Score: 3"</code>.</div>
+
+<h2>Sound</h2>
+<p>Sounds are attached to <b>keyframes</b>. Click a frame on any layer (a dedicated "Sound" layer keeps things tidy), and in Properties under <b>Sound</b> pick a clip, or choose <b>Import sound…</b> to add a WAV, MP3, OGG, M4A or FLAC file.</p>
+<table>
+  <tr><th>Setting</th><th>Meaning</th></tr>
+  <tr><td><b>Sync: Stream</b></td><td>Locked to the timeline: it plays only while its span is shown, and starting mid-span starts mid-sound. Use it for music and dialogue that must match the animation. A span shorter than the sound cuts it off; Properties tells you how many frames the clip needs.</td></tr>
+  <tr><td><b>Sync: Event</b></td><td>Starts from the beginning when the playhead enters the keyframe, then plays to the end whatever the timeline does. Use it for sound effects. Inside a movie clip, it follows the clip's own clock.</td></tr>
+  <tr><td><b>Volume</b>, <b>Loops</b></td><td>Level 0 to 100%, and extra repeats.</td></tr>
+</table>
+<p>The timeline marks keyframes with sound with <b>♪</b>, and a line under the span for streams. Press ▶ to hear the result. Sounds on hidden layers are silent.</p>
+<div class="note">Browsers only allow audio after the viewer clicks or presses a key. An exported page starts silent until then, unless you export with <b>Start on click</b> (see <a href="exporting.html">Exporting</a>).</div>
