@@ -345,6 +345,38 @@ itself, directly or transitively.
 Floats round-trip exactly (`serde_json` with `float_roundtrip`), so save →
 load → save is byte-stable.
 
+## Clipboard
+
+Copy (⌘C) puts plain text on the system clipboard: a JSON snippet that can be
+pasted into the same project, another project, or another Zoetrope window
+(`zoetrope_core::clipboard`).
+
+```json
+{ "format": "zoetrope-clipboard", "schemaVersion": 6,
+  "elements": [ ... ], "symbols": [ ... ], "assets": [ ... ] }
+```
+
+- **`elements`** are the copied elements, back to front, in the coordinates
+  of the timeline they came from.
+- **`symbols` and `assets`** are everything those elements use,
+  transitively: symbols through their instances; images, fonts and sounds
+  through bitmaps, texts and keyframe sounds.
+
+**Pasting** is one undo step:
+
+- **Assets** with identical content already in the project are reused.
+- **Symbols** with the same content are reused. Content is compared
+  structurally, with ids normalized and nested symbols and assets compared by
+  content, so pasting the same thing twice doesn't duplicate the library.
+- **Everything else** is added with fresh ids and the references are
+  rewritten. A new symbol whose name is taken gets "Name 2", "Name 3", and so
+  on.
+- **Elements** get fresh ids and land on top of the target layer at the
+  current frame.
+- **Version mismatch:** a snippet from a different schema version is refused
+  with a message. Re-open the project in that version, or save and open the
+  file instead.
+
 ## Pack
 
 A `.zoepack` is the same project in a binary container. It is used by the

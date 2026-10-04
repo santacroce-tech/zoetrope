@@ -1856,7 +1856,12 @@ fn random_op(doc: &mut Document, rng: &mut Rng) -> zoetrope_core::Result<()> {
     let layer = rng.pick(&layers).unwrap_or(LayerId(0));
     let symbols: Vec<SymbolId> = p.symbols.iter().map(|s| s.id).filter(|s| *s != p.root).collect();
     let pt = Point::new(rng.range(0.0, 900.0), rng.range(0.0, 500.0));
-    match rng.below(26) {
+    match rng.below(28) {
+        26 | 27 => {
+            // Copy an element and paste it somewhere (maybe another layer or frame).
+            let clip = zoetrope_core::clipboard::copy(&doc.project, &[el])?;
+            zoetrope_core::clipboard::paste(doc, layer, frame, &clip, 5.0, 5.0).map(|_| ())
+        }
         0 => ops::translate_elements(doc, &[el], rng.range(-50.0, 50.0), rng.range(-50.0, 50.0)),
         1 => ops::patch_element(doc, el, &json!({"opacity": rng.range(0.0, 1.0), "name": format!("n{}", rng.below(9))})),
         2 => {
@@ -1997,4 +2002,100 @@ fn blank_project_is_valid_and_editable() {
     .unwrap();
     assert!(id.is_some());
     assert_eq!(load_from_str(&save_to_string(&doc.project)).unwrap(), doc.project);
+}
+
+// ---------------------------------------------------------------- v0.2: copy and paste
+
+use zoetrope_core::clipboard;
+
+fn pink_fills(p: &Project) -> usize {
+    count(
+        &record(p),
+        |o| matches!(o, DrawOp::Fill { paint: Paint::Solid { color }, .. } if *color == Color::rgb(0xe8, 0x6a, 0x92)),
+    )
+}
+
+#[test]
+fn copy_paste_within_a_project_reuses_symbols() {
+    let mut doc = Document::new(demo_project());
+    let flower = find(&doc.project, "flower B");
+    let flowers = layer_named(&doc.project, "Flowers");
+    let (symbols, fills) = (doc.project.symbols.len(), pink_fills(&doc.project));
+    let clip = clipboard::copy(&doc.project, &[flower]).unwrap();
+    assert_eq!(clip.symbols.len(), 2, "Flower and Petal travel with it");
+    let ids = clipboard::paste(&mut doc, flowers, 0, &clip, 10.0, 10.0).unwrap();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(doc.project.symbols.len(), symbols, "identical symbols are reused");
+    assert_eq!(pink_fills(&doc.project), fills + 6, "six more petals");
+    let pasted = doc.project.element(ids[0]).unwrap();
+    assert_eq!(pasted.transform.x, doc.project.element(flower).unwrap().transform.x + 10.0);
+    assert_eq!(doc.undo_label(), Some("Paste"));
+    doc.undo().unwrap();
+    assert_eq!(pink_fills(&doc.project), fills, "one undo step");
+}
+
+#[test]
+fn paste_into_another_project_brings_symbols_and_assets() {
+    let demo = demo_project();
+    let clip = clipboard::copy(&demo, &[find(&demo, "flower A"), find(&demo, "title"), find(&demo, "bee1")]).unwrap();
+    assert_eq!(clip.elements.len(), 3);
+    assert!(clip.assets.iter().any(|a| a.name.ends_with(".ttf")), "the title's font comes along");
+    // Round trip through the text the system clipboard carries.
+    let text = serde_json::to_string(&clip).unwrap();
+    let clip = clipboard::parse(&text).unwrap().unwrap();
+
+    let mut doc = Document::new(zoetrope_core::demo::blank_project());
+    // A different symbol already called "Flower": the pasted one is renamed.
+    let layer = root_layers(&doc.project)[0];
+    let circle = ops::create_shape(
+        &mut doc,
+        layer,
+        ShapeTool::Ellipse,
+        Point::new(0.0, 0.0),
+        Point::new(9.0, 9.0),
+        Modifiers::default(),
+        &ShapeOptions::default(),
+        &style(Some(Color::BLACK), None),
+        0,
+    )
+    .unwrap()
+    .unwrap();
+    ops::convert_to_symbol(&mut doc, &[circle], "Flower", SymbolKind::Graphic, 0).unwrap();
+    let before = doc.project.symbols.len();
+    let ids = clipboard::paste(&mut doc, layer, 0, &clip, 0.0, 0.0).unwrap();
+    assert_eq!(ids.len(), 3);
+    doc.project.validate().unwrap();
+    let names: Vec<&str> = doc.project.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"Flower 2") && names.contains(&"Petal") && names.contains(&"Bee"), "{names:?}");
+    assert_eq!(doc.project.symbols.len(), before + 3);
+    assert_eq!(pink_fills(&doc.project), 6, "the pasted flower draws its petals");
+    assert_eq!(doc.project.assets.len(), 1, "the font");
+    // Pasting again reuses everything the first paste added.
+    clipboard::paste(&mut doc, layer, 0, &clip, 20.0, 0.0).unwrap();
+    assert_eq!(doc.project.symbols.len(), before + 3);
+    assert_eq!(doc.project.assets.len(), 1);
+    assert_eq!(load_from_str(&save_to_string(&doc.project)).unwrap(), doc.project);
+    // Undo removes everything a paste added.
+    doc.undo().unwrap();
+    doc.undo().unwrap();
+    assert_eq!(doc.project.symbols.len(), before);
+    assert!(doc.project.assets.is_empty());
+}
+
+#[test]
+fn clipboard_text_is_recognized_and_checked() {
+    assert!(clipboard::parse("hello world").is_none(), "plain text isn't ours");
+    assert!(clipboard::parse("{\"format\": \"something-else\"}").is_none());
+    let old = json!({"format": "zoetrope-clipboard", "schemaVersion": 1, "elements": []}).to_string();
+    assert!(clipboard::parse(&old).unwrap().is_err(), "other versions are refused with a message");
+    let p = demo_project();
+    assert!(clipboard::copy(&p, &[]).is_err());
+    // Pasting onto a locked layer changes nothing.
+    let mut doc = Document::new(demo_project());
+    let clip = clipboard::copy(&doc.project, &[find(&doc.project, "sun")]).unwrap();
+    let ui = layer_named(&doc.project, "UI");
+    ops::set_layer_props(&mut doc, ui, &LayerPatch { locked: Some(true), ..Default::default() }).unwrap();
+    let before = doc.project.clone();
+    assert!(clipboard::paste(&mut doc, ui, 0, &clip, 0.0, 0.0).is_err());
+    assert_eq!(doc.project, before);
 }

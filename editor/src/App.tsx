@@ -458,6 +458,87 @@ function Editor({ engine }: { engine: Engine }) {
     [engine, activeLayer, stage, changed],
   );
 
+  // ---------------------------------------------------------------- clipboard
+  // The browser's copy/cut/paste events (⌘C/⌘X/⌘V, or the Edit menu) work
+  // the same in browsers and the desktop webview, with no extra permission.
+  // Copies are self-contained JSON snippets (zoetrope_core::clipboard), so
+  // they paste into other projects and other windows too.
+  const clip = useRef({ text: "", count: 0, inPlaceNext: false });
+  /** Pastes clipboard text (a Zoetrope snippet, or plain text as a text object). */
+  const pasteText = useRef<(text: string, inPlace: boolean) => void>(() => {});
+  const clipState = useRef({ selection, activeLayer, playing, stage, placeImages });
+  clipState.current = { selection, activeLayer, playing, stage, placeImages };
+  useEffect(() => {
+    const typing = (t: EventTarget | null) =>
+      t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLElement && t.isContentEditable);
+    const copy = (e: ClipboardEvent, cut: boolean) => {
+      const s = clipState.current;
+      if (typing(e.target) || s.playing || !s.selection.length) return;
+      try {
+        const json = engine.copyJson(JSON.stringify(s.selection));
+        e.clipboardData?.setData("text/plain", json);
+        e.preventDefault();
+        clip.current = { text: json, count: 0, inPlaceNext: false };
+        const n = s.selection.length;
+        if (cut) {
+          engine.deleteElements(JSON.stringify(s.selection));
+          setSelection([]);
+          changed();
+        }
+        setMessage({ text: `${cut ? "Cut" : "Copied"} ${n} object${n === 1 ? "" : "s"}` });
+      } catch (err) {
+        setMessage({ text: `${cut ? "Cut" : "Copy"} failed: ${errorText(err)}`, error: true });
+      }
+    };
+    const paste = (e: ClipboardEvent) => {
+      const s = clipState.current;
+      if (typing(e.target) || s.playing || !e.clipboardData) return;
+      e.preventDefault();
+      const images = Array.from(e.clipboardData.files).filter((f) => /^image\/(png|jpeg|gif)$/.test(f.type));
+      if (images.length) {
+        void Promise.all(images.map(fileToBinary)).then((bins) => s.placeImages(bins, null));
+        return;
+      }
+      pasteText.current(e.clipboardData.getData("text/plain"), clip.current.inPlaceNext);
+      clip.current.inPlaceNext = false;
+    };
+    pasteText.current = (text: string, inPlace: boolean) => {
+      const s = clipState.current;
+      if (!text.trim()) return;
+      if (s.activeLayer === null) return setMessage({ text: "Select a layer to paste into", error: true });
+      // Repeated pastes step down-right; ⇧⌘V pastes in place.
+      const c = clip.current;
+      c.count = text === c.text ? c.count + 1 : 1;
+      c.text = text;
+      const offset = inPlace ? 0 : 10 * c.count;
+      try {
+        const ids = engine.pasteJson(s.activeLayer, text, offset, offset);
+        if (ids !== undefined) {
+          setSelection(JSON.parse(ids));
+          const n = JSON.parse(ids).length;
+          setMessage({ text: `Pasted ${n} object${n === 1 ? "" : "s"}` });
+        } else {
+          setSelection([engine.pasteText(s.activeLayer, text, s.stage.width / 2, s.stage.height / 2)]);
+          setMessage({ text: "Pasted text" });
+        }
+        setTool("select");
+      } catch (err) {
+        setMessage({ text: `Paste failed: ${errorText(err)}`, error: true });
+      }
+      changed();
+    };
+    const onCopy = (e: ClipboardEvent) => copy(e, false);
+    const onCut = (e: ClipboardEvent) => copy(e, true);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("cut", onCut);
+    document.addEventListener("paste", paste);
+    return () => {
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("cut", onCut);
+      document.removeEventListener("paste", paste);
+    };
+  }, [engine, changed]);
+
   const importDialog = useCallback(async () => {
     try {
       placeImages(await importImages(), null);
@@ -603,7 +684,15 @@ function Editor({ engine }: { engine: Engine }) {
     else if (mod && e.key === "0") setView(null);
     else if (mod && e.key === "1") zoomTo(1);
     else if (mod && e.key === "'") setSettings((s) => ({ ...s, [e.shiftKey ? "snapToGrid" : "showGrid"]: !s[e.shiftKey ? "snapToGrid" : "showGrid"] }));
-    else if (mod) handled = false;
+    else if (mod && k === "v" && e.shiftKey && clip.current.text) {
+      // Paste in place: browsers treat ⇧⌘V as "paste and match style" and may
+      // not fire a paste event, so it pastes the last Zoetrope copy directly.
+      if (!playing) pasteText.current(clip.current.text, true);
+    } else if (mod && k === "v") {
+      // The paste itself arrives as a "paste" event.
+      clip.current.inPlaceNext = false;
+      handled = false;
+    } else if (mod) handled = false;
     else if (e.key === "Escape") setSelection([]);
     else if ((e.key === "Delete" || e.key === "Backspace") && tool === "subselect" && anchors.length && selection.length === 1) {
       run(() => engine.deleteAnchors(selection[0], JSON.stringify(anchors)));

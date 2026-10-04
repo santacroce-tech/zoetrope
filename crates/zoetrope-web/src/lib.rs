@@ -1289,6 +1289,53 @@ impl Engine {
         Ok(to_json(&new.iter().map(|e| e.0).collect::<Vec<_>>()))
     }
 
+    /// Copies elements as clipboard text (a self-contained JSON snippet with
+    /// the symbols and assets they need; see `zoetrope_core::clipboard`).
+    #[wasm_bindgen(js_name = copyJson)]
+    pub fn copy_json(&self, ids_json: &str) -> Result<String, JsError> {
+        let clip = zoetrope_core::clipboard::copy(&self.doc.project, &ids(ids_json)?).map_err(js_err)?;
+        Ok(to_json(&clip))
+    }
+
+    /// Pastes clipboard text on top of `layer` at the current frame, moved by
+    /// `(dx, dy)`. Returns the new ids as JSON, or `undefined` if the text
+    /// isn't a Zoetrope snippet (the caller may paste it as text instead).
+    #[wasm_bindgen(js_name = pasteJson)]
+    pub fn paste_json(&mut self, layer: u32, text: &str, dx: f64, dy: f64) -> Result<Option<String>, JsError> {
+        let Some(clip) = zoetrope_core::clipboard::parse(text) else { return Ok(None) };
+        let clip = clip.map_err(js_err)?;
+        self.cancel_all();
+        let new = zoetrope_core::clipboard::paste(&mut self.doc, LayerId(layer), self.frame, &clip, dx, dy).map_err(js_err)?;
+        Ok(Some(to_json(&new.iter().map(|e| e.0).collect::<Vec<_>>())))
+    }
+
+    /// Pastes plain text as a new text element (default style) whose box is
+    /// centered on the stage point `(x, y)`. Returns its id.
+    #[wasm_bindgen(js_name = pasteText)]
+    pub fn paste_text(&mut self, layer: u32, text: &str, x: f64, y: f64) -> Result<u32, JsError> {
+        self.cancel_all();
+        let text = text.trim_end();
+        if text.is_empty() {
+            return Err(JsError::new("nothing to paste"));
+        }
+        // Default style = the bundled font, so it can be measured up front.
+        let style = ops::TextStyle::default();
+        let block = zoetrope_core::TextBlock {
+            text: text.to_string(),
+            font: zoetrope_core::AssetId(0),
+            size: style.size,
+            fill: zoetrope_core::Paint::solid(style.color),
+            align: style.align,
+            letter_spacing: style.letter_spacing,
+            line_height: style.line_height,
+            width: None,
+        };
+        let (w, h) =
+            zoetrope_core::text::layout(&block, zoetrope_core::text::DEFAULT_FONT).map_or((0.0, 0.0), |l| (l.width, l.height));
+        let at = self.local(x - w / 2.0, y - h / 2.0);
+        ops::create_text(&mut self.doc, LayerId(layer), at, text, &style, None, self.frame).map(|e| e.0).map_err(js_err)
+    }
+
     /// `mode`: left | centerX | right | top | centerY | bottom.
     pub fn align(&mut self, ids_json: &str, mode: &str, to_stage: bool) -> Result<(), JsError> {
         let mode: Align = parse("align mode", &format!("{mode:?}"))?;
