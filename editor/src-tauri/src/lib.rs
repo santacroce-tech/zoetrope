@@ -6,7 +6,9 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+
+mod menu;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 const EXTENSION: &str = "zoe";
@@ -315,26 +317,125 @@ async fn read_picked_file(path: String, picked: State<'_, PickedFiles>) -> Resul
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+// ------------------------------------------------------------------ opening files from the OS
+
+/// Project files the OS asked us to open: double-clicked `.zoe` files
+/// (launch arguments on Windows/Linux, Apple "open" events on macOS). Only
+/// these may be read by `take_pending_open`.
+#[derive(Default)]
+struct PendingOpen(Mutex<Vec<PathBuf>>);
+
+fn is_project(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION)) && p.is_file()
+}
+
+/// The next project the OS asked to open, read and remembered (so it can be
+/// saved back), or null. The frontend calls this at startup and on `open-file`.
+#[tauri::command]
+fn take_pending_open(
+    app: AppHandle,
+    pending: State<'_, PendingOpen>,
+    known: State<'_, KnownProjects>,
+) -> Result<Option<OpenedFile>, String> {
+    let next = {
+        let mut list = pending.0.lock().unwrap();
+        if list.is_empty() {
+            return Ok(None);
+        }
+        list.remove(0)
+    };
+    let contents = std::fs::read_to_string(&next).map_err(|e| format!("could not read {}: {e}", next.display()))?;
+    remember(&app, &known, &next);
+    Ok(Some(OpenedFile { path: next.to_string_lossy().into_owned(), contents }))
+}
+
+fn queue_open(app: &AppHandle, path: PathBuf) {
+    if !is_project(&path) {
+        return;
+    }
+    if let Some(pending) = app.try_state::<PendingOpen>() {
+        pending.0.lock().unwrap().push(path);
+    }
+    let _ = app.emit("open-file", ());
+}
+
+// ------------------------------------------------------------------ help links & quitting
+
+/// Opens one of the project's web pages in the default browser (Help menu).
+/// Only the project's own site and repository are allowed.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["https://santacroce-tech.github.io/zoetrope/", "https://github.com/santacroce-tech/zoetrope"];
+    if !ALLOWED.iter().any(|p| url.starts_with(p)) || url.contains(['"', '\'', ' ', '\n']) {
+        return Err("that address can't be opened from here".into());
+    }
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(&url).status();
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &url]).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = std::process::Command::new("xdg-open").arg(&url).status();
+    status.map(|_| ()).map_err(|e| format!("could not open the browser: {e}"))
+}
+
+/// Quits after the frontend has dealt with unsaved changes.
+#[tauri::command]
+fn exit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(PickedFiles::default())
         .manage(ExportTarget::default())
         .manage(KnownProjects::default())
+        .manage(PendingOpen::default())
+        .setup(|app| {
+            app.set_menu(menu::build(app.handle())?)?;
+            // Windows and Linux pass double-clicked files as arguments.
+            for arg in std::env::args_os().skip(1) {
+                queue_open(app.handle(), PathBuf::from(arg));
+            }
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            let _ = app.emit("menu", event.id().as_ref());
+        })
         .invoke_handler(tauri::generate_handler![
             save_project,
             open_project,
             recent_files,
             open_recent,
+            take_pending_open,
             autosave_write,
             autosave_read,
             autosave_clear,
             export_begin,
             export_write,
             pick_files,
-            read_picked_file
+            read_picked_file,
+            open_url,
+            exit_app
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Zoetrope");
+        .build(tauri::generate_context!())
+        .expect("error while building Zoetrope");
+    app.run(|app, event| match event {
+        // Quitting from outside the menu (Dock, logout): let the frontend
+        // ask about unsaved changes; it calls `exit_app` when done.
+        RunEvent::ExitRequested { code: None, api, .. } => {
+            api.prevent_exit();
+            let _ = app.emit("menu", "quit");
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        RunEvent::Opened { urls } => {
+            for url in urls {
+                if let Ok(path) = url.to_file_path() {
+                    queue_open(app, path);
+                }
+            }
+        }
+        _ => {}
+    });
 }

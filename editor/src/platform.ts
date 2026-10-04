@@ -2,6 +2,8 @@
 // shell's commands; in a plain browser (vite dev without Tauri) it falls back
 // to download/upload so the editor stays usable for development and testing.
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const isTauri = "__TAURI_INTERNALS__" in window;
 
@@ -165,4 +167,61 @@ export async function recentFiles(): Promise<RecentFile[]> {
 
 export async function openRecent(path: string): Promise<OpenedFile> {
   return invoke<OpenedFile>("open_recent", { path });
+}
+
+// ------------------------------------------------------------------ native app integration
+
+/** Native menu clicks (item ids from src-tauri/src/menu.rs). No-op in a browser. */
+export async function onMenu(handler: (id: string) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  return listen<string>("menu", (e) => handler(e.payload));
+}
+
+/** The OS asked to open a project (double-clicked .zoe file). */
+export async function onOpenFileRequest(handler: () => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  return listen("open-file", () => handler());
+}
+
+/** The next project the OS asked to open (at launch or since), or null. */
+export async function takePendingOpen(): Promise<OpenedFile | null> {
+  return isTauri ? invoke<OpenedFile | null>("take_pending_open") : null;
+}
+
+/** Opens one of the project's web pages in the browser. */
+export async function openUrl(url: string): Promise<void> {
+  if (isTauri) return invoke("open_url", { url });
+  window.open(url, "_blank", "noopener");
+}
+
+/**
+ * Asks before the window closes: `allow()` returns false to keep it open
+ * (e.g. to show an unsaved-changes prompt). Browsers get the standard
+ * "Leave site?" dialog instead.
+ */
+export async function onCloseRequested(allow: () => boolean): Promise<() => void> {
+  if (isTauri) {
+    return getCurrentWindow().onCloseRequested((e) => {
+      if (!allow()) e.preventDefault();
+    });
+  }
+  const before = (e: BeforeUnloadEvent) => {
+    if (!allow()) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  };
+  window.addEventListener("beforeunload", before);
+  return () => window.removeEventListener("beforeunload", before);
+}
+
+/** Closes the window without asking (after the prompt was answered). */
+export async function closeWindow(): Promise<void> {
+  if (isTauri) await getCurrentWindow().destroy();
+  else window.close();
+}
+
+/** Quits the app (native only; after the prompt was answered). */
+export async function exitApp(): Promise<void> {
+  if (isTauri) await invoke("exit_app");
 }
