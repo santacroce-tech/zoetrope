@@ -1,7 +1,8 @@
 # Builds installers for macOS (universal), Windows and Linux and publishes
 # them as a GitHub Release when a version tag is pushed:
 #   git tag v0.2.0 && git push origin v0.2.0
-# The tag must match the version in editor/src-tauri/tauri.conf.json.
+# The tag must match the version in editor/src-tauri/tauri.conf.json (also in
+# editor/package.json and the workspace Cargo.toml); the first step checks it.
 name: Release
 on:
   push:
@@ -27,6 +28,15 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(node -p "require('./editor/src-tauri/tauri.conf.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} doesn't match the app version ${version} (editor/src-tauri/tauri.conf.json). Bump the version first."
+            exit 1
+          fi
       - name: System libraries (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -56,6 +66,8 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Zoetrope ${{ github.ref_name }}
           releaseBody: |
+            What's new: https://github.com/santacroce-tech/zoetrope/blob/main/CHANGELOG.md
+
             Downloads for every platform are below; see the website for which one to pick:
             https://santacroce-tech.github.io/zoetrope/#download
 

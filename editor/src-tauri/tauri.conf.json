@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Zoetrope",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "app.zoetrope.editor",
   "build": {
     "beforeDevCommand": "npm run wasm && npm run dev",
