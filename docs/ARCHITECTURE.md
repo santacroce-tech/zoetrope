@@ -233,10 +233,33 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
 | `autosave_write` | `contents: string, meta: string` | writes `autosave.zoe` and `autosave.json` (opaque metadata) to the app data folder, atomically |
 | `autosave_read` | — | `{ contents, meta }` or `null` |
 | `autosave_clear` | — | removes the autosave |
+| `take_pending_open` | — | `{ path, contents }` of the next project the OS asked to open (a double-clicked `.zoe`, from launch arguments on Windows/Linux or the Apple open event on macOS), or `null`. Only those paths are readable; each becomes saveable and goes in the recent list. |
+| `open_url` | `url: string` | opens one of the project's own pages (site or repository) in the browser; anything else is refused |
+| `exit_app` | — | quits; the frontend calls it after the unsaved-changes prompt |
 | `export_begin` | `single: bool, name: string` | asks for the destination (a `.html` file, or a folder for folder exports) and remembers it; the path, or `null` if cancelled |
 | `export_write` | raw bytes, header `x-file-name` (percent-encoded) | writes one export file. Single-file exports go to the chosen path. Otherwise the file goes into the chosen folder, and only plain names are accepted (no separators, no leading dot). |
 | `pick_files` | `kind: "image" \| "font" \| "audio"` | `[{ path, name }]` from a native multi-select dialog filtered by kind (`[]` if cancelled) |
 | `read_picked_file` | `path: string` | raw bytes (`ArrayBuffer`), **only** for a path just returned by `pick_files`, readable once |
+
+**Events from the shell:**
+- `menu` carries a native menu item id (`src-tauri/src/menu.rs`). App.tsx's
+  action map runs it.
+- `open-file` means the OS asked to open a project; the frontend calls
+  `take_pending_open`.
+- Quitting from outside the menu (Dock, logout) arrives as `menu: "quit"`,
+  so it goes through the same unsaved-changes prompt.
+
+**Menus and shortcuts:** menu accelerators duplicate the editor's keyboard
+shortcuts. A key can reach the webview, the menu, or both, so a menu event
+for the shortcut that was just pressed is ignored (`lastShortcut` in
+App.tsx). In text fields, Undo, Redo and Select All act on the text. Cut,
+Copy and Paste are native menu items, so they become ordinary DOM clipboard
+events.
+
+**Closing:** the window's close request, ⌘W and Quit are checked for unsaved
+changes ("Save / Don't Save / Cancel"). Browsers get the standard "Leave
+site?" prompt. `.zoe` files are registered with the OS through
+`bundle.fileAssociations`.
 
 The shell treats project contents as opaque strings and never parses them.
 Dialogs open from Rust, so JS is granted no dialog/fs permissions

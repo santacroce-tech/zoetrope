@@ -25,7 +25,14 @@ import type { OutputLine } from "./runtime/scripting";
 import { describeImport, importFonts } from "./assets";
 import {
   clearAutosave,
+  closeWindow,
+  exitApp,
   fileToBinary,
+  onCloseRequested,
+  onMenu,
+  onOpenFileRequest,
+  openUrl,
+  takePendingOpen,
   importImages,
   isTauri,
   openProject,
@@ -80,6 +87,49 @@ function containsLayer(nodes: LayerNode[], id: number): boolean {
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+const SITE = "https://santacroce-tech.github.io/zoetrope/";
+const REPO = "https://github.com/santacroce-tech/zoetrope";
+
+/**
+ * The action (native menu item id) a key press stands for, if any. Keys
+ * and menu accelerators are the same; see src-tauri/src/menu.rs.
+ */
+function shortcutAction(e: KeyboardEvent): string | null {
+  const mod = e.metaKey || e.ctrlKey;
+  const k = e.key.toLowerCase();
+  if (e.key === "F8") return "convert-to-symbol";
+  if (!e.shiftKey && e.key === "F5") return "insert-frame";
+  if (!e.shiftKey && e.key === "F6") return "insert-keyframe";
+  if (e.key === "F7") return "insert-blank-keyframe";
+  if (!mod) return null;
+  if (e.shiftKey) {
+    return { s: "save-as", e: "export", z: "redo", v: "paste-in-place", "}": "bring-to-front", "]": "bring-to-front", "{": "send-to-back", "[": "send-to-back", '"': "toggle-snap-grid", "'": "toggle-snap-grid" }[k] ?? null;
+  }
+  return (
+    {
+      n: "new", o: "open", s: "save", i: "import", w: "close", q: "quit", ",": "preferences",
+      z: "undo", y: "redo", a: "select-all", d: "duplicate", e: "edit-symbol", b: "convert-to-path",
+      "]": "bring-forward", "[": "send-backward", "=": "zoom-in", "+": "zoom-in", "-": "zoom-out",
+      "0": "zoom-fit", "1": "zoom-100", "'": "toggle-grid",
+    }[k] ?? null
+  );
+}
+
+/**
+ * The last shortcut pressed anywhere in the page, including text fields.
+ * A native menu event for the same action right after it means the key
+ * reached both the webview and the menu: the webview already handled it.
+ */
+const lastShortcut = { id: "", t: -Infinity };
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const id = shortcutAction(e);
+    if (id) Object.assign(lastShortcut, { id, t: performance.now() });
+  },
+  true,
+);
 
 function Editor({ engine }: { engine: Engine }) {
   // The model lives in the core. `version` is bumped after every change so
@@ -323,19 +373,22 @@ function Editor({ engine }: { engine: Engine }) {
     setView(null);
   };
 
+  /** Saves; resolves to whether the project was written. */
   const save = useCallback(
-    async (saveAs: boolean) => {
+    async (saveAs: boolean): Promise<boolean> => {
       try {
         const path = await saveProject(engine.saveJson(), saveAs ? null : filePath);
-        if (path === null) return;
+        if (path === null) return false;
         engine.markSaved();
         setFilePath(path);
         setMessage({ text: `Saved ${path}` });
         void clearAutosave().catch(() => {});
         void recentFiles().then(setRecent, () => {});
         changed();
+        return true;
       } catch (e) {
         setMessage({ text: `Save failed: ${errorText(e)}`, error: true });
+        return false;
       }
     },
     [engine, filePath, changed],
@@ -638,6 +691,77 @@ function Editor({ engine }: { engine: Engine }) {
     setView({ zoom: zz, panX: eff.w / 2 - (stage.width * zz) / 2, panY: eff.h / 2 - (stage.height * zz) / 2 });
   };
 
+  // ---------------------------------------------------------------- actions
+  // Every command reachable from the keyboard or the native menu, by menu id
+  // (src-tauri/src/menu.rs). Keyboard shortcuts and menu clicks run the same
+  // code; see MENU_KEYS for how double delivery is avoided.
+  const textFocused = () => {
+    const a = document.activeElement;
+    return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement;
+  };
+  const arrange = (op: "front" | "forward" | "backward" | "back") => hasSel && run(() => engine.arrange(sel, op));
+  const actions: Record<string, () => void> = {
+    new: () => guardUnsaved("New", () => newDemo("blank")),
+    "new-animation": () => guardUnsaved("New", () => newDemo("animation")),
+    "new-game": () => guardUnsaved("New", () => newDemo("game")),
+    open: () => guardUnsaved("Open", open),
+    save: () => void save(false),
+    "save-as": () => void save(true),
+    import: () => void importDialog(),
+    export: () => setExporting(true),
+    close: () => requestClose("close"),
+    quit: () => requestClose("quit"),
+    preferences: () => setShowPrefs(true),
+    // In a text field, these act on the text (a menu click there must not
+    // undo the drawing or select every object).
+    undo: () => (textFocused() ? document.execCommand("undo") : undo()),
+    redo: () => (textFocused() ? document.execCommand("redo") : redo()),
+    "select-all": () => (textFocused() ? document.execCommand("selectAll") : setSelection(JSON.parse(engine.selectAll()))),
+    deselect: () => setSelection([]),
+    "paste-in-place": () => {
+      if (clip.current.text && !playing) pasteText.current(clip.current.text, true);
+    },
+    duplicate: () => hasSel && run(() => setSelection(JSON.parse(engine.duplicateElements(sel, 10, 10)))),
+    delete: () => {
+      if (!hasSel) return;
+      run(() => engine.deleteElements(sel));
+      setSelection([]);
+    },
+    "zoom-in": () => zoomBy(1.25),
+    "zoom-out": () => zoomBy(0.8),
+    "zoom-fit": () => setView(null),
+    "zoom-100": () => zoomTo(1),
+    "toggle-grid": () => setSettings((s) => ({ ...s, showGrid: !s.showGrid })),
+    "toggle-snap-grid": () => setSettings((s) => ({ ...s, snapToGrid: !s.snapToGrid })),
+    "toggle-rulers": () => setSettings((s) => ({ ...s, showRulers: !s.showRulers })),
+    "toggle-guides": () => setSettings((s) => ({ ...s, showGuides: !s.showGuides })),
+    "toggle-output": () => setShowOutput((v) => !v),
+    "convert-to-symbol": () => {
+      if (hasSel) setConvert({ name: `Symbol ${library.length + 1}`, kind: "movieClip" });
+      else setMessage({ text: "Select objects to convert to a symbol", error: true });
+    },
+    "edit-symbol": () => selection.length === 1 && enterInstance(selection[0]),
+    "convert-to-path": () => hasSel && run(() => engine.convertToPath(sel)),
+    "bring-to-front": () => arrange("front"),
+    "bring-forward": () => arrange("forward"),
+    "send-backward": () => arrange("backward"),
+    "send-to-back": () => arrange("back"),
+    play: () => setPlaying((p) => !p),
+    "first-frame": () => (setPlaying(false), goTo(0)),
+    "prev-frame": () => (setPlaying(false), goTo(frame - 1)),
+    "next-frame": () => (setPlaying(false), goTo(frame + 1)),
+    "last-frame": () => (setPlaying(false), goTo(timelineLength - 1)),
+    "insert-frame": () => frameOp("frame"),
+    "insert-keyframe": () => frameOp("key"),
+    "insert-blank-keyframe": () => frameOp("blank"),
+    "help-manual": () => void openUrl(`${SITE}manual/`),
+    "help-shortcuts": () => setShowShortcuts(true),
+    "help-scripting": () => void openUrl(`${SITE}manual/scripting.html`),
+    "help-issue": () => void openUrl(`${REPO}/issues/new`),
+  };
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+
   // Keyboard shortcuts.
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
   keys.current = (e: KeyboardEvent) => {
@@ -654,41 +778,19 @@ function Editor({ engine }: { engine: Engine }) {
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
     const step = e.shiftKey ? 10 : 1;
+    const id = shortcutAction(e);
     let handled = true;
-    if (e.key === "?" && !mod) setShowShortcuts(true);
-    else if (e.key === "F8") {
-      if (hasSel) setConvert({ name: `Symbol ${library.length + 1}`, kind: "movieClip" });
-      else setMessage({ text: "Select objects to convert to a symbol", error: true });
-    } else if (mod && k === "e" && selection.length === 1) enterInstance(selection[0]);
+    if (id && (id !== "close" && id !== "quit" ? true : isTauri)) actions[id]();
+    else if (e.key === "?" && !mod) setShowShortcuts(true);
     else if (!mod && e.key === "Escape" && !hasSel && crumbs.length > 1) exitTo(crumbs.length - 2);
-    else if (e.key === "F5") frameOp(e.shiftKey ? "removeFrame" : "frame");
-    else if (e.key === "F6") frameOp(e.shiftKey ? "clear" : "key");
-    else if (e.key === "F7") frameOp("blank");
-    else if (!mod && e.key === "Enter") setPlaying((p) => !p);
-    else if (!mod && e.key === ",") (setPlaying(false), goTo(frame - 1));
-    else if (!mod && e.key === ".") (setPlaying(false), goTo(frame + 1));
-    else if (!mod && e.key === "Home") (setPlaying(false), goTo(0));
-    else if (!mod && e.key === "End") (setPlaying(false), goTo(timelineLength - 1));
-    else if (mod && k === "z" && !e.shiftKey) undo();
-    else if (mod && ((k === "z" && e.shiftKey) || k === "y")) redo();
-    else if (mod && k === "s") save(e.shiftKey);
-    else if (mod && k === "o") guardUnsaved("Open", open);
-    else if (mod && k === "i") importDialog();
-    else if (mod && k === "a") setSelection(JSON.parse(engine.selectAll()));
-    else if (mod && k === "b" && hasSel) run(() => engine.convertToPath(sel));
-    else if (mod && k === "d" && hasSel) run(() => setSelection(JSON.parse(engine.duplicateElements(sel, 10, 10))));
-    else if (mod && (e.key === "]" || e.key === "}") && hasSel) run(() => engine.arrange(sel, e.shiftKey ? "front" : "forward"));
-    else if (mod && (e.key === "[" || e.key === "{") && hasSel) run(() => engine.arrange(sel, e.shiftKey ? "back" : "backward"));
-    else if (mod && (e.key === "=" || e.key === "+")) zoomBy(1.25);
-    else if (mod && e.key === "-") zoomBy(0.8);
-    else if (mod && e.key === "0") setView(null);
-    else if (mod && e.key === "1") zoomTo(1);
-    else if (mod && e.key === "'") setSettings((s) => ({ ...s, [e.shiftKey ? "snapToGrid" : "showGrid"]: !s[e.shiftKey ? "snapToGrid" : "showGrid"] }));
-    else if (mod && k === "v" && e.shiftKey && clip.current.text) {
-      // Paste in place: browsers treat ⇧⌘V as "paste and match style" and may
-      // not fire a paste event, so it pastes the last Zoetrope copy directly.
-      if (!playing) pasteText.current(clip.current.text, true);
-    } else if (mod && k === "v") {
+    else if (e.key === "F5" && e.shiftKey) frameOp("removeFrame");
+    else if (e.key === "F6" && e.shiftKey) frameOp("clear");
+    else if (!mod && e.key === "Enter") actions.play();
+    else if (!mod && e.key === ",") actions["prev-frame"]();
+    else if (!mod && e.key === ".") actions["next-frame"]();
+    else if (!mod && e.key === "Home") actions["first-frame"]();
+    else if (!mod && e.key === "End") actions["last-frame"]();
+    else if (mod && k === "v") {
       // The paste itself arrives as a "paste" event.
       clip.current.inPlaceNext = false;
       handled = false;
@@ -697,10 +799,8 @@ function Editor({ engine }: { engine: Engine }) {
     else if ((e.key === "Delete" || e.key === "Backspace") && tool === "subselect" && anchors.length && selection.length === 1) {
       run(() => engine.deleteAnchors(selection[0], JSON.stringify(anchors)));
       setAnchors([]);
-    } else if ((e.key === "Delete" || e.key === "Backspace") && hasSel) {
-      run(() => engine.deleteElements(sel));
-      setSelection([]);
-    } else if (e.key === "ArrowLeft" && hasSel) run(() => engine.translateElements(sel, -step, 0));
+    } else if (e.key === "Delete" || e.key === "Backspace") actions.delete();
+    else if (e.key === "ArrowLeft" && hasSel) run(() => engine.translateElements(sel, -step, 0));
     else if (e.key === "ArrowRight" && hasSel) run(() => engine.translateElements(sel, step, 0));
     else if (e.key === "ArrowUp" && hasSel) run(() => engine.translateElements(sel, 0, -step));
     else if (e.key === "ArrowDown" && hasSel) run(() => engine.translateElements(sel, 0, step));
@@ -708,6 +808,58 @@ function Editor({ engine }: { engine: Engine }) {
     else handled = false;
     if (handled) e.preventDefault();
   };
+
+  // Native menu: run the action, unless the same shortcut was just pressed
+  // in the webview (which then already handled it, natively or above).
+  useEffect(() => {
+    let off = () => {};
+    void onMenu((id) => {
+      const recent = performance.now() - lastShortcut.t < 400 && lastShortcut.id === id;
+      if (!recent) actionsRef.current[id]?.();
+    }).then((u) => (off = u));
+    return () => off();
+  }, []);
+
+  // ---------------------------------------------------------------- closing & opening from the OS
+  const [closeAsk, setCloseAsk] = useState<"close" | "quit" | null>(null);
+  const finishClose = useCallback((kind: "close" | "quit") => {
+    closing.current = true;
+    void (kind === "quit" ? exitApp() : closeWindow());
+  }, []);
+  const closing = useRef(false);
+  const dirtyRef = useRef(history.dirty);
+  dirtyRef.current = history.dirty;
+  function requestClose(kind: "close" | "quit") {
+    if (dirtyRef.current) setCloseAsk(kind);
+    else finishClose(kind);
+  }
+  useEffect(() => {
+    let off = () => {};
+    void onCloseRequested(() => {
+      if (closing.current || !dirtyRef.current) return true;
+      setCloseAsk("close");
+      return false;
+    }).then((u) => (off = u));
+    return () => off();
+  }, []);
+  const openPending = useCallback(async () => {
+    try {
+      const file = await takePendingOpen();
+      if (file) loadOpened(file);
+    } catch (e) {
+      setMessage({ text: `Open failed: ${errorText(e)}`, error: true });
+    }
+  }, [loadOpened]);
+  const openPendingRef = useRef(openPending);
+  openPendingRef.current = openPending;
+  const guardRef = useRef(guardUnsaved);
+  guardRef.current = guardUnsaved;
+  useEffect(() => {
+    void openPendingRef.current(); // a file double-clicked to launch the app
+    let off = () => {};
+    void onOpenFileRequest(() => guardRef.current("Open", () => void openPendingRef.current())).then((u) => (off = u));
+    return () => off();
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => keys.current(e);
     window.addEventListener("keydown", onKey);
@@ -831,6 +983,39 @@ function Editor({ engine }: { engine: Engine }) {
         />
       )}
       {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
+      {closeAsk && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>Save changes to “{exportTitle}” before {closeAsk === "quit" ? "quitting" : "closing"}?</h3>
+            <p className="hint flush">If you don't save, your changes since the last save will be lost.</p>
+            <div className="btn-row">
+              <button
+                onClick={() => {
+                  void clearAutosave().catch(() => {});
+                  const kind = closeAsk;
+                  setCloseAsk(null);
+                  finishClose(kind);
+                }}
+              >
+                Don't Save
+              </button>
+              <button onClick={() => setCloseAsk(null)}>Cancel</button>
+              <button
+                autoFocus
+                onClick={async () => {
+                  const kind = closeAsk;
+                  if (await save(false)) {
+                    setCloseAsk(null);
+                    finishClose(kind);
+                  }
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {recovery && (
         <div className="modal-backdrop">
           <div className="modal recovery">

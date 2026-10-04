@@ -6,10 +6,13 @@ export const SHORTCUTS: { group: string; keys: [string, string][] }[] = [
   {
     group: "File",
     keys: [
+      [`${MOD}N`, "New blank project"],
       [`${MOD}S`, "Save"],
       [`⇧${MOD}S`, "Save as"],
       [`${MOD}O`, "Open"],
       [`${MOD}I`, "Import images"],
+      [`⇧${MOD}E`, "Export"],
+      [`${MOD},`, "Preferences"],
       [`${MOD}Z`, "Undo"],
       [`⇧${MOD}Z / ${MOD}Y`, "Redo"],
       ["?", "This list"],
