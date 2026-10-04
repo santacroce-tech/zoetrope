@@ -924,7 +924,12 @@ mod tests {
 
     fn render(p: &Project) -> Vec<crate::render::DrawOp> {
         let mut r = RecordingRenderer::default();
-        render_frame(p, 0, RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides: true, onion: None }, &mut r);
+        render_frame(
+            p,
+            0,
+            RenderOptions { view: Matrix::IDENTITY, clip_to_stage: true, show_guides: true, onion: None, edit_masks: false },
+            &mut r,
+        );
         r.ops
     }
 

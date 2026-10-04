@@ -733,6 +733,7 @@ function ScriptSection(props: { engine: Engine; layer: number; start: number; la
   const [expanded, setExpanded] = useState(false);
   const ids = JSON.stringify([layer]);
   const apply = (s: string) => run(() => engine.setFrameScript(ids, start, s.trim() ? s : undefined));
+  const names = JSON.parse(engine.scriptNamesJson(undefined));
   return (
     <section>
       <h4>
@@ -751,12 +752,12 @@ function ScriptSection(props: { engine: Engine; layer: number; start: number; la
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
       </label>
-      {!expanded && <ScriptEditor key={`${layer}:${start}`} value={props.script} onApply={apply} placeholder={FRAME_SCRIPT_HINT} rows={8} />}
+      {!expanded && <ScriptEditor key={`${layer}:${start}`} value={props.script} onApply={apply} placeholder={FRAME_SCRIPT_HINT} rows={8} names={names} />}
       {expanded && (
         <div className="modal-backdrop" onClick={() => setExpanded(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <h3>Frame script: frame {start + 1}</h3>
-            <ScriptEditor value={props.script} onApply={apply} placeholder={FRAME_SCRIPT_HINT} rows={22} autoFocus />
+            <ScriptEditor value={props.script} onApply={apply} placeholder={FRAME_SCRIPT_HINT} rows={22} autoFocus names={names} />
             <div className="btn-row">
               <button onClick={() => setExpanded(false)}>Close</button>
             </div>

@@ -142,6 +142,14 @@ export function Timeline(props: Props) {
           >
             Guide
           </button>
+          <button
+            title="Mask layer: the layer below (and any you drag in) shows only where this layer's shapes are. Lock it to see the effect while editing."
+            disabled={!active || active.kind === "folder"}
+            className={active?.kind === "mask" ? "on" : ""}
+            onClick={() => active && props.onPatchLayer(active.id, { kind: active.kind === "mask" ? "normal" : "mask" })}
+          >
+            Mask
+          </button>
           <button title="Delete layer" disabled={!active} onClick={() => active && props.onDeleteLayer(active.id)}>
             🗑
           </button>

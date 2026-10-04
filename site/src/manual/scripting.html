@@ -10,7 +10,13 @@
   <tr><td><b>Frame script</b></td><td>Click a keyframe, then <b>Label &amp; script</b> in Properties (⤢ opens a large editor).</td><td>each time the playhead enters that keyframe</td><td>the timeline (the main timeline, or the movie clip)</td></tr>
   <tr><td><b>Symbol script</b></td><td>Select a symbol in the Library and click <b>{ }</b>.</td><td>once for every instance, when it appears</td><td>the instance</td></tr>
 </table>
-<p>In the script editor, <kbd>Tab</kbd> indents, <kbd>⌘↵</kbd> / <kbd>Ctrl+Enter</kbd> or <b>Apply</b> applies (one undo step), and <kbd>Esc</kbd> reverts unapplied edits.</p>
+<h3>The script editor</h3>
+<ul>
+  <li><b>Suggestions</b> appear as you type: the scripting API, the instance names on the timeline, variables already in the script, frame labels inside <code>gotoAndPlay("…")</code>, event names inside <code>stage.addEventListener("…")</code> and keys inside <code>Key.isDown("…")</code>. <kbd>↑</kbd>/<kbd>↓</kbd> choose, <kbd>↵</kbd> or <kbd>Tab</kbd> insert, <kbd>Esc</kbd> closes, <kbd>Ctrl+Space</kbd> opens the list anywhere. Picking an event such as <code>onEnterFrame</code> writes the whole handler for you.</li>
+  <li><b>Errors</b> are checked as you type, with the same compiler playback uses: the problem is underlined, its line number turns red, and the message appears under the editor. Click it to jump there.</li>
+  <li><kbd>↵</kbd> keeps the indentation (and indents after <code>{</code>), <kbd>Tab</kbd> / <kbd>⇧Tab</kbd> indent or outdent the selected lines, <kbd>⌘/</kbd> / <kbd>Ctrl+/</kbd> comments them out or back in, and <kbd>⌘Z</kbd> undoes typing inside the editor.</li>
+  <li><kbd>⌘↵</kbd> / <kbd>Ctrl+Enter</kbd> or <b>Apply</b> applies the script (one undo step in the project), and <kbd>Esc</kbd> reverts unapplied edits.</li>
+</ul>
 
 <h2>Names and scope</h2>
 <p>Give objects an <b>instance name</b> in Properties, and use it directly. Free names resolve against the timeline, as in Flash:</p>

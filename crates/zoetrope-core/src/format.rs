@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const FORMAT_ID: &str = "zoetrope-project";
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// One migration step: upgrades a whole envelope from version N to N+1.
 /// It may assume `schemaVersion == N`; the runner rewrites the version field.
@@ -19,7 +19,7 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// `MIGRATIONS[i]` upgrades schema version `i + 1` to `i + 2`.
 /// Append here whenever `SCHEMA_VERSION` is bumped.
-const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6];
+const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7];
 
 /// v1 → v2 (Phase 3): strokes changed from `{ width, color }` to
 /// `{ width, paint, cap, join, miterLimit, … }`. Old strokes become solid
@@ -99,6 +99,12 @@ fn v4_to_v5(v: Value) -> Result<Value> {
 /// v5 → v6 (Phase 8): optional export settings (`publish`). Nothing in
 /// older files changes.
 fn v5_to_v6(v: Value) -> Result<Value> {
+    Ok(v)
+}
+
+/// v6 → v7 (v0.2): mask layers (`"kind": "mask"`, holding the masked
+/// layers as children). Older files contain none, so nothing changes.
+fn v6_to_v7(v: Value) -> Result<Value> {
     Ok(v)
 }
 

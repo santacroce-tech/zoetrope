@@ -63,6 +63,50 @@ export function loadQuickJS(): Promise<QuickJSWASMModule> {
   return modulePromise;
 }
 
+/**
+ * How frame and symbol scripts are compiled: a function whose scope is the
+ * timeline or instance. It opens on the script's first line, so line
+ * numbers match the source.
+ */
+const WRAP_OPEN = "(function () { with (__scope(this)) { ";
+const wrapScript = (code: string) => `${WRAP_OPEN}${code}\n} })`;
+
+/** A syntax error; line and column are 1-based in the script's own text. */
+export interface SyntaxProblem {
+  line: number;
+  column: number;
+  message: string;
+}
+
+let checker: QuickJSContext | null = null;
+
+/**
+ * Compiles a script without running it, exactly as playback would, and
+ * returns its syntax error, if any. For the script editor.
+ */
+export async function checkSyntax(code: string): Promise<SyntaxProblem | null> {
+  const qjs = await loadQuickJS();
+  checker ??= qjs.newContext();
+  const r = checker.evalCode(wrapScript(code), "script", { type: "global", strict: false, compileOnly: true });
+  if (!r.error) {
+    r.value.dispose();
+    return null;
+  }
+  const e = checker.dump(r.error);
+  r.error.dispose();
+  const at = /:(\d+):(\d+)/.exec(String(e?.stack ?? ""));
+  const lines = code.split("\n");
+  let line = at ? Number(at[1]) : (e?.lineNumber ?? 1);
+  let column = at ? Number(at[2]) : 1;
+  if (line === 1) column -= WRAP_OPEN.length;
+  // Errors found only at the wrapper's closing line belong to the end of the script.
+  if (line > lines.length) {
+    line = lines.length;
+    column = lines[line - 1].length + 1;
+  }
+  return { line, column: Math.max(1, column), message: String(e?.message ?? e) };
+}
+
 const keyOf = (path: Path) => path.map(([l, t]) => `${l}.${t}`).join("/");
 
 export class ScriptHost {
@@ -136,9 +180,7 @@ export class ScriptHost {
   private runScript(code: string, where: string, path: Path) {
     let fn = this.compiled.get(code);
     if (!fn) {
-      // Same line numbers as the source: the wrapper opens on line 1.
-      const wrapped = `(function () { with (__scope(this)) { ${code}\n} })`;
-      const r = this.vm.evalCode(wrapped, where, { type: "global", strict: false });
+      const r = this.vm.evalCode(wrapScript(code), where, { type: "global", strict: false });
       if (r.error) {
         this.reportHandle(r.error, where);
         r.error.dispose();

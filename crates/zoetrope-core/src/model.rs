@@ -191,6 +191,12 @@ pub enum LayerKind {
     Guide,
     /// Holds child layers (no elements). Hiding/locking cascades to children.
     Folder,
+    /// Holds elements *and* child layers: the children are drawn only where
+    /// the mask's filled areas are (the mask itself isn't drawn). Children
+    /// must be normal or guide layers. Hiding/locking cascades like a folder.
+    /// In the editor a mask only clips while it is locked (as in Flash), so
+    /// its shapes stay visible and editable otherwise.
+    Mask,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -207,7 +213,7 @@ pub struct Layer {
     /// Content layers only: contiguous keyframe spans from frame 0.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keyframes: Vec<Keyframe>,
-    /// Folders only. Bottom-to-top.
+    /// Folders and masks only. Bottom-to-top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Layer>,
 }
@@ -232,6 +238,15 @@ impl Layer {
 
     pub fn is_folder(&self) -> bool {
         self.kind == LayerKind::Folder
+    }
+
+    /// Folders and masks hold child layers.
+    pub fn holds_layers(&self) -> bool {
+        matches!(self.kind, LayerKind::Folder | LayerKind::Mask)
+    }
+
+    pub fn is_mask(&self) -> bool {
+        self.kind == LayerKind::Mask
     }
 }
 
@@ -767,6 +782,18 @@ impl Project {
         self.layer(id).ok_or_else(|| Error::NotFound(format!("layer {}", id.0)))
     }
 
+    /// The list a layer lives in: a symbol's top level or a folder's (or mask's) children.
+    pub fn layer_list(&self, symbol: SymbolId, parent: Option<LayerId>) -> Result<&Vec<Layer>> {
+        let sym = self.symbol(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
+        match parent {
+            None => Ok(&sym.layers),
+            Some(pid) => find_layer(&sym.layers, pid)
+                .filter(|l| l.holds_layers())
+                .map(|l| &l.children)
+                .ok_or_else(|| Error::NotFound(format!("layer {}", pid.0))),
+        }
+    }
+
     /// The list a layer lives in: a symbol's top level or a folder's children.
     pub fn layer_list_mut(&mut self, symbol: SymbolId, parent: Option<LayerId>) -> Result<&mut Vec<Layer>> {
         let sym = self.symbol_mut(symbol).ok_or_else(|| Error::NotFound(format!("symbol {}", symbol.0)))?;
@@ -774,8 +801,8 @@ impl Project {
             None => Ok(&mut sym.layers),
             Some(pid) => {
                 let folder = find_layer_mut(&mut sym.layers, pid).ok_or_else(|| Error::NotFound(format!("layer {}", pid.0)))?;
-                if !folder.is_folder() {
-                    return Err(Error::Invalid(format!("layer {} is not a folder", pid.0)));
+                if !folder.holds_layers() {
+                    return Err(Error::Invalid(format!("layer {} is not a folder or mask", pid.0)));
                 }
                 Ok(&mut folder.children)
             }
@@ -932,8 +959,11 @@ impl Project {
                     if l.is_folder() && !l.keyframes.is_empty() {
                         return invalid(format!("folder {} contains keyframes", l.id.0));
                     }
-                    if !l.is_folder() && !l.children.is_empty() {
-                        return invalid(format!("layer {} has child layers but is not a folder", l.id.0));
+                    if !l.holds_layers() && !l.children.is_empty() {
+                        return invalid(format!("layer {} has child layers but is not a folder or mask", l.id.0));
+                    }
+                    if l.is_mask() && l.children.iter().any(|c| c.holds_layers()) {
+                        return invalid(format!("mask {} may only mask normal and guide layers", l.id.0));
                     }
                     check_keyframes(l)?;
                     for s in l.keyframes.iter().filter_map(|k| k.sound.as_ref()) {
@@ -995,6 +1025,10 @@ impl Symbol {
                 if l.is_folder() {
                     go(&l.children, v, k, out);
                 } else {
+                    // A mask's masked layers come before (under) the mask.
+                    if l.is_mask() {
+                        go(&l.children, v, k, out);
+                    }
                     out.push((l, v, k));
                 }
             }

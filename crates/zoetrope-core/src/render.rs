@@ -44,6 +44,11 @@ pub trait Renderer {
     /// which composites it with `blend` at `alpha`. Groups nest.
     fn begin_group(&mut self, blend: BlendMode, alpha: f64);
     fn end_group(&mut self);
+    /// Subsequent draws are clipped to the union of these filled paths
+    /// (each with its transform, view included, non-zero rule) until the
+    /// matching `end_clip`. An empty list hides everything. Clips nest.
+    fn begin_clip(&mut self, paths: &[(Path, Matrix)]);
+    fn end_clip(&mut self);
     fn end_frame(&mut self);
 }
 
@@ -55,11 +60,14 @@ pub struct RenderOptions {
     pub show_guides: bool,
     /// Editor onion skinning of the root timeline.
     pub onion: Option<Onion>,
+    /// Editor: unlocked mask layers show their shapes instead of clipping
+    /// (Flash behaviour). Player/export: masks always clip.
+    pub edit_masks: bool,
 }
 
 impl RenderOptions {
     pub fn player(view: Matrix) -> Self {
-        RenderOptions { view, clip_to_stage: true, show_guides: false, onion: None }
+        RenderOptions { view, clip_to_stage: true, show_guides: false, onion: None, edit_masks: false }
     }
 }
 
@@ -223,6 +231,23 @@ impl<'a> Ctx<'a> {
         for layer in layers.iter().filter(|l| l.visible) {
             match layer.kind {
                 LayerKind::Folder => self.layers(&layer.children, frame, m, ct, depth, path, excl, r),
+                LayerKind::Mask if self.opts.edit_masks && !layer.locked => {
+                    // Editing: the masked layers unclipped, the mask's shapes on top.
+                    self.layers(&layer.children, frame, m, ct, depth, path, excl, r);
+                    for shown in evaluate_layer_shown(layer, frame) {
+                        self.element(&shown, layer.id, frame, m, ct, depth, path, excl, r);
+                    }
+                }
+                LayerKind::Mask => {
+                    // The mask's filled areas, gathered with the same walk that draws.
+                    let mut shape = ClipCollector::default();
+                    for shown in evaluate_layer_shown(layer, frame) {
+                        self.element(&shown, layer.id, frame, m, ct, depth, path, excl, &mut shape);
+                    }
+                    r.begin_clip(&shape.paths);
+                    self.layers(&layer.children, frame, m, ct, depth, path, excl, r);
+                    r.end_clip();
+                }
                 LayerKind::Guide if !self.opts.show_guides => {}
                 LayerKind::Guide | LayerKind::Normal => {
                     if depth == 0 && !layer.locked {
@@ -360,6 +385,30 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// Collects what a mask covers: every filled area (strokes don't count, as
+/// in Flash), with images as their rectangles.
+#[derive(Default)]
+struct ClipCollector {
+    paths: Vec<(Path, Matrix)>,
+}
+
+impl Renderer for ClipCollector {
+    fn begin_frame(&mut self, _: &FrameInfo) {}
+    fn fill_path(&mut self, path: &Path, transform: &Matrix, _: &Paint, _: FillRule) {
+        self.paths.push((path.clone(), *transform));
+    }
+    fn stroke_path(&mut self, _: &Path, _: &Matrix, _: &Stroke) {}
+    fn draw_image(&mut self, _: AssetId, width: f64, height: f64, transform: &Matrix, _: &ColorTransform) {
+        let rect = Path::rect(-width / 2.0, -height / 2.0, width, height);
+        self.paths.push((rect, *transform));
+    }
+    fn begin_group(&mut self, _: BlendMode, _: f64) {}
+    fn end_group(&mut self) {}
+    fn begin_clip(&mut self, _: &[(Path, Matrix)]) {}
+    fn end_clip(&mut self) {}
+    fn end_frame(&mut self) {}
+}
+
 /// One recorded renderer call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawOp {
@@ -369,6 +418,8 @@ pub enum DrawOp {
     Image { asset: AssetId, width: f64, height: f64, transform: Matrix, color: ColorTransform },
     BeginGroup { blend: BlendMode, alpha: f64 },
     EndGroup,
+    BeginClip { paths: Vec<(Path, Matrix)> },
+    EndClip,
     End,
 }
 
@@ -398,6 +449,12 @@ impl Renderer for RecordingRenderer {
     fn end_group(&mut self) {
         self.ops.push(DrawOp::EndGroup);
     }
+    fn begin_clip(&mut self, paths: &[(Path, Matrix)]) {
+        self.ops.push(DrawOp::BeginClip { paths: paths.to_vec() });
+    }
+    fn end_clip(&mut self) {
+        self.ops.push(DrawOp::EndClip);
+    }
     fn end_frame(&mut self) {
         self.ops.push(DrawOp::End);
     }
@@ -426,5 +483,7 @@ impl Renderer for NullRenderer {
     fn draw_image(&mut self, _: AssetId, _: f64, _: f64, _: &Matrix, _: &ColorTransform) {}
     fn begin_group(&mut self, _: BlendMode, _: f64) {}
     fn end_group(&mut self) {}
+    fn begin_clip(&mut self, _: &[(Path, Matrix)]) {}
+    fn end_clip(&mut self) {}
     fn end_frame(&mut self) {}
 }

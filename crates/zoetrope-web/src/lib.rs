@@ -84,6 +84,12 @@ impl zoetrope_core::render::Renderer for PreviewRenderer<'_> {
     fn end_group(&mut self) {
         self.0.end_group()
     }
+    fn begin_clip(&mut self, paths: &[(zoetrope_core::geom::Path, Matrix)]) {
+        self.0.begin_clip(paths)
+    }
+    fn end_clip(&mut self) {
+        self.0.end_clip()
+    }
     fn end_frame(&mut self) {
         self.0.end_frame()
     }
@@ -236,7 +242,7 @@ impl Engine {
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
-        let opts = RenderOptions { view, clip_to_stage: clip, show_guides, onion };
+        let opts = RenderOptions { view, clip_to_stage: clip, show_guides, onion, edit_masks: true };
         if self.levels.is_empty() {
             render_frame(&self.doc.project, frame, opts, &mut r);
         } else {
@@ -375,7 +381,7 @@ impl Engine {
         render_editing(
             p,
             &view,
-            RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None },
+            RenderOptions { view: Matrix::IDENTITY, clip_to_stage: false, show_guides: false, onion: None, edit_masks: false },
             &mut r,
         );
     }
@@ -612,7 +618,11 @@ impl Engine {
         let images = self.images.borrow();
         let mut pool = self.pool.borrow_mut();
         let mut r = Canvas2dRenderer::new(ctx, &mut pool, &images.bitmaps);
-        pl.render(&self.doc.project, RenderOptions { view, clip_to_stage: clip, show_guides, onion: None }, &mut r);
+        pl.render(
+            &self.doc.project,
+            RenderOptions { view, clip_to_stage: clip, show_guides, onion: None, edit_masks: false },
+            &mut r,
+        );
     }
 
     /// Scripts due since the last call (empty when not playing):
@@ -669,6 +679,16 @@ impl Engine {
     #[wasm_bindgen(js_name = setSymbolScript)]
     pub fn set_symbol_script(&mut self, symbol: u32, script: Option<String>) -> Result<(), JsError> {
         ops::set_symbol_script(&mut self.doc, SymbolId(symbol), script.as_deref()).map_err(js_err)
+    }
+
+    /// `{ names, labels }` a script can use on `symbol`'s timeline (the
+    /// timeline being edited when `null`): instance names and frame labels.
+    #[wasm_bindgen(js_name = scriptNamesJson)]
+    pub fn script_names_json(&self, symbol: Option<u32>) -> String {
+        let p = &self.doc.project;
+        let symbol = symbol.map(SymbolId).unwrap_or_else(|| self.levels.last().map_or(p.root, |l| l.symbol));
+        let (names, labels) = zoetrope_core::script::names_in(p, symbol);
+        serde_json::json!({ "names": names, "labels": labels }).to_string()
     }
 
     /// `null` or the symbol's script.

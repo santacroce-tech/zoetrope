@@ -397,6 +397,33 @@ impl Renderer for Canvas2dRenderer<'_> {
         }
     }
 
+    fn begin_clip(&mut self, paths: &[(Path, Matrix)]) {
+        // Canvas paths are transformed as they are built, so each mask shape
+        // is added under its own transform, then the union becomes the clip.
+        let ctx = self.ctx().clone();
+        ctx.save();
+        ctx.begin_path();
+        for (path, m) in paths {
+            self.set_transform(m);
+            for cmd in &path.cmds {
+                match cmd {
+                    PathCmd::MoveTo(p) => ctx.move_to(p.x, p.y),
+                    PathCmd::LineTo(p) => ctx.line_to(p.x, p.y),
+                    PathCmd::QuadTo(c, p) => ctx.quadratic_curve_to(c.x, c.y, p.x, p.y),
+                    PathCmd::CubicTo(c1, c2, p) => ctx.bezier_curve_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
+                    PathCmd::Close => ctx.close_path(),
+                }
+            }
+        }
+        ctx.clip();
+    }
+
+    fn end_clip(&mut self) {
+        self.ctx().restore();
+        // restore() also brought back older fill/stroke state.
+        *self.sent() = SentState::default();
+    }
+
     fn end_frame(&mut self) {
         while !self.groups.is_empty() {
             self.end_group();

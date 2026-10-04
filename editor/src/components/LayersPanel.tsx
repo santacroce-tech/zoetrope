@@ -10,11 +10,14 @@ export interface LayerRow {
   storageIndex: number;
 }
 
+/** Folders and masks hold layers (a mask's children are the layers it masks). */
+const holdsLayers = (n: LayerNode) => n.kind === "folder" || n.kind === "mask";
+
 /** Flattens the (top-first) layer tree, skipping collapsed folders' children. */
 export function flattenLayers(nodes: LayerNode[], collapsed: Set<number>, depth = 0, parent: number | null = null, out: LayerRow[] = []): LayerRow[] {
   nodes.forEach((node, displayIndex) => {
     out.push({ node, depth, parent, storageIndex: nodes.length - 1 - displayIndex });
-    if (node.kind === "folder" && !collapsed.has(node.id)) flattenLayers(node.children, collapsed, depth + 1, node.id, out);
+    if (holdsLayers(node) && !collapsed.has(node.id)) flattenLayers(node.children, collapsed, depth + 1, node.id, out);
   });
   return out;
 }
@@ -23,7 +26,7 @@ export interface LayerPatch {
   name?: string;
   visible?: boolean;
   locked?: boolean;
-  kind?: "normal" | "guide";
+  kind?: "normal" | "guide" | "mask";
 }
 
 interface Props {
@@ -53,7 +56,7 @@ export function LayersPanel(props: Props) {
   const dropPosition = (e: React.DragEvent, node: LayerNode): DropPos => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const f = (e.clientY - r.top) / r.height;
-    if (node.kind === "folder" && f > 0.25 && f < 0.75) return "into";
+    if (holdsLayers(node) && f > 0.25 && f < 0.75) return "into";
     return f < 0.5 ? "above" : "below";
   };
 
@@ -106,15 +109,15 @@ export function LayersPanel(props: Props) {
             <span
               className="twisty"
               onClick={(e) => {
-                if (node.kind !== "folder") return;
+                if (!holdsLayers(node)) return;
                 e.stopPropagation();
                 props.onToggleCollapsed(node.id);
               }}
             >
-              {node.kind === "folder" ? (collapsed.has(node.id) ? "▸" : "▾") : ""}
+              {holdsLayers(node) ? (collapsed.has(node.id) ? "▸" : "▾") : ""}
             </span>
-            <span className="kind" title={node.kind}>
-              {node.kind === "folder" ? "▤" : node.kind === "guide" ? "⌗" : "▭"}
+            <span className="kind" title={node.kind === "mask" ? "mask: the layers inside show only where its shapes are" : node.kind}>
+              {node.kind === "folder" ? "▤" : node.kind === "guide" ? "⌗" : node.kind === "mask" ? "◪" : "▭"}
             </span>
             {renaming === node.id ? (
               <input

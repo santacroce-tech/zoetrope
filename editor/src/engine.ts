@@ -21,7 +21,7 @@ export interface Rect {
   max: Pt;
 }
 
-export type LayerKind = "normal" | "guide" | "folder";
+export type LayerKind = "normal" | "guide" | "folder" | "mask";
 
 export interface LayerNode {
   id: number;

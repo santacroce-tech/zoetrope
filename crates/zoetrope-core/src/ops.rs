@@ -755,7 +755,7 @@ pub struct LayerPatch {
     pub name: Option<String>,
     pub visible: Option<bool>,
     pub locked: Option<bool>,
-    /// Only `normal` ⇄ `guide`.
+    /// `normal`, `guide` or `mask` (not to or from `folder`).
     pub kind: Option<LayerKind>,
 }
 
@@ -785,9 +785,37 @@ pub fn set_layer_props(doc: &mut Document, id: LayerId, patch: &LayerPatch) -> R
         LayerPatch { name: Some(_), .. } => "Rename Layer",
         LayerPatch { visible: Some(_), .. } => "Show/Hide Layer",
         LayerPatch { locked: Some(_), .. } => "Lock/Unlock Layer",
+        LayerPatch { kind: Some(LayerKind::Mask), .. } => "Mask",
         _ => "Layer Type",
     };
-    doc.execute(label, vec![Edit::SetLayerProps { layer: id, props }])
+    let was_mask = l.is_mask();
+    let becomes_mask = props.kind == LayerKind::Mask;
+    let loc = doc.project.locate_layer(id).ok_or_else(|| Error::NotFound(format!("layer {}", id.0)))?;
+    let mut edits = Vec::new();
+    if was_mask && !becomes_mask {
+        // Release the masked layers in place: just below where the mask is.
+        let children = l.children.clone();
+        for c in children.iter().rev() {
+            edits.push(Edit::RemoveLayer { layer: c.id });
+        }
+        edits.push(Edit::SetLayerProps { layer: id, props });
+        for (i, c) in children.into_iter().enumerate() {
+            edits.push(Edit::InsertLayer { symbol: loc.symbol, parent: loc.parent, index: loc.index + i, layer: c });
+        }
+    } else if becomes_mask && !was_mask {
+        // As in Flash, the layer directly below becomes masked.
+        edits.push(Edit::SetLayerProps { layer: id, props });
+        let siblings = doc.project.layer_list(loc.symbol, loc.parent)?;
+        if let Some(below) = loc.index.checked_sub(1).map(|i| siblings[i].clone()) {
+            if matches!(below.kind, LayerKind::Normal | LayerKind::Guide) {
+                edits.push(Edit::RemoveLayer { layer: below.id });
+                edits.push(Edit::InsertLayer { symbol: loc.symbol, parent: Some(id), index: 0, layer: below });
+            }
+        }
+    } else {
+        edits.push(Edit::SetLayerProps { layer: id, props });
+    }
+    doc.execute(label, edits)
 }
 
 /// Moves a layer into `parent` (a folder, or the top level when `None`) at

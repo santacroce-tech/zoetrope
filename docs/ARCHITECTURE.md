@@ -97,8 +97,9 @@ code.
 when `opts.show_guides`) → elements (back→front). It composes
 `parent · translate · rotate · skew · scale · translate(-pivot)` down the tree.
 
-The `Renderer` trait has seven methods: `begin_frame`, `fill_path`,
-`stroke_path`, `draw_image`, `begin_group`, `end_group`, `end_frame`.
+The `Renderer` trait has nine methods: `begin_frame`, `fill_path`,
+`stroke_path`, `draw_image`, `begin_group`, `end_group`, `begin_clip`,
+`end_clip`, `end_frame`.
 
 * Paints arrive **final**: the core applies the composed color transform
   (tint, then opacity, child first) to solid colors and to every gradient
@@ -112,6 +113,12 @@ The `Renderer` trait has seven methods: `begin_frame`, `fill_path`,
 * A non-`normal` blend mode wraps the element in `begin_group(blend, opacity)`
   / `end_group`. Canvas2D renders groups to pooled offscreen canvases and
   composites them with `globalCompositeOperation`.
+* A mask layer becomes `begin_clip(paths)` / `end_clip` around the layers it
+  holds. The core collects the mask's fill paths for the current frame (with
+  their full transforms, through nested symbols) and the backend intersects
+  the clip with their union. Canvas2D traces every path into one
+  `clip()`. `RenderOptions.edit_masks` makes an unlocked mask draw like a
+  normal layer in the editor; the player always clips.
 
 Output is deterministic: the same project, frame and options always produce
 the same call sequence (asserted in tests).
