@@ -4595,7 +4595,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zoetrope-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4606,7 +4606,7 @@ dependencies = [
 
 [[package]]
 name = "zoetrope-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rustybuzz",
  "serde",
@@ -4615,7 +4615,7 @@ dependencies = [
 
 [[package]]
 name = "zoetrope-web"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "serde",
