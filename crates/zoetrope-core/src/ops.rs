@@ -260,7 +260,7 @@ impl ShapeStyle {
     }
 }
 
-fn check_target_layer(p: &Project, layer: LayerId) -> Result<()> {
+pub(crate) fn check_target_layer(p: &Project, layer: LayerId) -> Result<()> {
     let l = p.require_layer(layer)?;
     if l.is_folder() {
         return Err(Error::Invalid("select a layer (not a folder) to draw on".into()));
@@ -307,7 +307,7 @@ pub fn create_shape(
 /// Edits that put `elements` on top of `layer`'s keyframe at `frame`. If the
 /// layer ends before `frame`, it is first extended with a blank keyframe
 /// there (the last span stretches to fill the gap), as one transaction.
-fn place_on_top(p: &Project, layer: LayerId, frame: u32, elements: Vec<Element>) -> Result<Vec<Edit>> {
+pub(crate) fn place_on_top(p: &Project, layer: LayerId, frame: u32, elements: Vec<Element>) -> Result<Vec<Edit>> {
     let l = p.require_layer(layer)?;
     let mut edits = Vec::new();
     let keyframe = match l.keyframe_at(frame) {

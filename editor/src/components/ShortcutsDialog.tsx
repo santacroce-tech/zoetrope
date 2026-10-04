@@ -32,6 +32,8 @@ export const SHORTCUTS: { group: string; keys: [string, string][] }[] = [
   {
     group: "Objects",
     keys: [
+      [`${MOD}C / ${MOD}X / ${MOD}V`, "Copy / cut / paste (also between projects)"],
+      [`⇧${MOD}V`, "Paste in place"],
       [`${MOD}A`, "Select all"],
       ["Esc", "Deselect · leave symbol editing"],
       ["Delete", "Delete"],

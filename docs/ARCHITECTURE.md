@@ -177,6 +177,13 @@ and `cancel` (Esc) restores. Undo/redo cancel any open session first.
   each stream within 0.12 s of its cue position, starts events with their
   loops, and stops everything when playback stops. It holds no timing logic
   of its own, so the exported player can reuse it as is.
+* **Clipboard**: `copyJson(ids)` returns the snippet text (FORMAT.md,
+  "Clipboard"). `pasteJson(layer, text, dx, dy)` returns the new ids, or
+  `undefined` when the text isn't a Zoetrope snippet. `pasteText(layer, text,
+  x, y)` pastes plain text as a text element. The editor drives these from
+  the DOM `copy`/`cut`/`paste` events, which need no permission in browsers
+  or the Tauri webview. ⇧⌘V (paste in place) uses the last copy directly,
+  because browsers treat that shortcut as "paste and match style".
 * **Export**: `savePack()` / `loadPack(bytes)` (FORMAT.md, "Pack"), and
   `publishJson()` / `setPublish(json)` for the export settings, saved with
   the project and undoable. `playDigest()` fingerprints what the runtime shows

@@ -4,6 +4,7 @@
 //! preview and the exported player.
 
 pub mod asset;
+pub mod clipboard;
 pub mod color;
 pub mod demo;
 pub mod edit;
